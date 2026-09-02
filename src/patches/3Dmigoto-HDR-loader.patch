@@ -1,0 +1,170 @@
+diff --git a/DirectX11/HackerDXGI.cpp b/DirectX11/HackerDXGI.cpp
+index 82cfd09..8bec53e 100644
+--- a/DirectX11/HackerDXGI.cpp
++++ b/DirectX11/HackerDXGI.cpp
+@@ -349,6 +349,28 @@ STDMETHODIMP HackerSwapChain::QueryInterface(THIS_
+ 		return hr;
+ 	}
+ 
++	// Native HDR swap chains use IDXGISwapChain3/4 to negotiate the HDR
++	// color space (SetColorSpace1) and frame-latency state.  The old GIMI
++	// wrapper deliberately rejected these interfaces because returning the
++	// wrapper with a newer vtable was unsafe for some older games.  Returning
++	// E_NOINTERFACE here prevents Unity/Genshin from completing HDR setup and
++	// leaves a black back buffer.  For the R10G10B10A2 HDR path, expose the
++	// original interface pointer instead; calls that need the newer vtable
++	// then use the DXGI implementation with the correct ABI, while the
++	// IDXGISwapChain1 methods remain handled by this wrapper.
++	DXGI_SWAP_CHAIN_DESC current_desc = {};
++	const bool native_hdr_swap_chain =
++		SUCCEEDED(mOrigSwapChain1->GetDesc(&current_desc)) &&
++		current_desc.BufferDesc.Format == DXGI_FORMAT_R10G10B10A2_UNORM;
++	if (native_hdr_swap_chain &&
++		(riid == __uuidof(IDXGISwapChain2) ||
++		 riid == __uuidof(IDXGISwapChain3) ||
++		 riid == __uuidof(IDXGISwapChain4)))
++	{
++		LogInfo("  exposing native HDR %s interface %p\n", NameFromIID(riid).c_str(), *ppvObject);
++		return hr;
++	}
++
+ 	// For TheDivision, only upon Win10, it will request these.  Even though the object
+ 	// we would return is the exact same pointer in memory, it still calls into the object
+ 	// with a vtable entry that does not match what they expected. Somehow they decide
+@@ -701,6 +723,32 @@ STDMETHODIMP HackerSwapChain::ResizeBuffers(THIS_
+ 			G->mResolutionInfo.width, G->mResolutionInfo.height);
+ 	}
+ 
++	// ReShade (and some other post-processing wrappers) may request an sRGB
++	// format while the game is using the HDR R10G10B10A2 swap chain. Passing
++	// that format through this wrapper makes DXGI reject the resize with
++	// E_INVALIDARG. DXGI_FORMAT_UNKNOWN means "keep the existing format" for
++	// ResizeBuffers, preserving the HDR swap-chain contract.
++	DXGI_SWAP_CHAIN_DESC current_desc = {};
++	if (SUCCEEDED(mOrigSwapChain1->GetDesc(&current_desc)) &&
++		current_desc.BufferDesc.Format == DXGI_FORMAT_R10G10B10A2_UNORM)
++	{
++		if (NewFormat != DXGI_FORMAT_UNKNOWN && NewFormat != current_desc.BufferDesc.Format)
++		{
++			LogInfo("  Preserving HDR swap-chain format %d instead of requested format %d\n",
++				static_cast<int>(current_desc.BufferDesc.Format), static_cast<int>(NewFormat));
++			NewFormat = DXGI_FORMAT_UNKNOWN;
++		}
++		// Flip-model HDR swap chains require at least two buffers. ReShade's
++		// resize path uses BufferCount=1, which is invalid for the original
++		// chain, so retain its existing count as well.
++		if (current_desc.BufferCount >= 2 && BufferCount != 0 && BufferCount < 2)
++		{
++			LogInfo("  Preserving HDR buffer count %u instead of requested count %u\n",
++				current_desc.BufferCount, BufferCount);
++			BufferCount = current_desc.BufferCount;
++		}
++	}
++
+ 	HRESULT hr = mOrigSwapChain1->ResizeBuffers(BufferCount, Width, Height, NewFormat, SwapChainFlags);
+ 
+ 	LogInfo("  returns result = %x\n", hr);
+diff --git a/Injector/Injector.cpp b/Injector/Injector.cpp
+index db238c3..065fa01 100755
+--- a/Injector/Injector.cpp
++++ b/Injector/Injector.cpp
+@@ -10,6 +10,38 @@
+ #include <tlhelp32.h>
+ #include <set>
+ 
++static void diagnostic_log(const char *message)
++{
++	char executable_path[MAX_PATH], line[512];
++	char *separator;
++	HANDLE file;
++	DWORD written;
++	SYSTEMTIME timestamp;
++
++	if (!GetModuleFileNameA(NULL, executable_path, MAX_PATH))
++		return;
++
++	separator = strrchr(executable_path, '\\');
++	if (!separator)
++		return;
++
++	*separator = '\0';
++	strcat_s(executable_path, "\\3DMigotoLoader-debug.log");
++	GetLocalTime(&timestamp);
++	sprintf_s(line, "%04u-%02u-%02u %02u:%02u:%02u | %s\\r\\n",
++		timestamp.wYear, timestamp.wMonth, timestamp.wDay,
++		timestamp.wHour, timestamp.wMinute, timestamp.wSecond, message);
++
++	file = CreateFileA(executable_path, FILE_APPEND_DATA,
++		FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS,
++		FILE_ATTRIBUTE_NORMAL, NULL);
++	if (file == INVALID_HANDLE_VALUE)
++		return;
++
++	WriteFile(file, line, (DWORD)strlen(line), &written, NULL);
++	CloseHandle(file);
++}
++
+ static void wait_keypress(const char *msg)
+ {
+ 	puts(msg);
+@@ -211,7 +243,10 @@ static bool check_for_running_target(wchar_t *target, const wchar_t *module)
+ 		if (_wcsicmp(pe.szExeFile, basename))
+ 			continue;
+ 
++		diagnostic_log("matching target process found");
+ 		rc = verify_injection(&pe, module, !pids.count(pe.th32ProcessID)) || rc;
++		if (rc)
++			diagnostic_log("3DMigoto module found in target process");
+ 		pids.insert(pe.th32ProcessID);
+ 	} while (Process32Next(snapshot, &pe));
+ 
+@@ -316,6 +351,7 @@ int main()
+ 	FARPROC fn;
+ 	HHOOK hook;
+ 	bool launch;
++	diagnostic_log("loader process entered main");
+ 
+ 	CreateMutexA(0, FALSE, "Local\\3DMigotoLoader");
+ 	if (GetLastError() == ERROR_ALREADY_EXISTS)
+@@ -351,6 +387,7 @@ int main()
+ 
+ 	if (!find_ini_setting_lite(ini_section, "module", module_path, MAX_PATH))
+ 		exit_usage("d3dx.ini [Loader] section missing required \"module\" setting\n");
++	diagnostic_log("loader configuration parsed");
+ 
+ 	// We've had support for this injection method in 3DMigoto since 1.3.5,
+ 	// however until 1.3.15 it lacked the check in DllMain to bail out of
+@@ -367,9 +404,11 @@ int main()
+ 
+ 	module = LoadLibraryA(module_path);
+ 	if (!module) {
++		diagnostic_log("failed to load configured 3DMigoto module");
+ 		printf("Unable to load 3DMigoto \"%s\"\n", module_path);
+ 		wait_exit(EXIT_FAILURE);
+ 	}
++	diagnostic_log("configured 3DMigoto module loaded");
+ 
+ 	GetModuleFileName(module, module_full_path, MAX_PATH);
+ 	printf("Loaded %S\n\n", module_full_path);
+@@ -379,14 +418,20 @@ int main()
+ 	else
+ 		fn = GetProcAddress(module, "CBTProc");
+ 	if (!fn) {
++		diagnostic_log("configured module does not export hook entry point");
+ 		wait_exit(EXIT_FAILURE, "Module does not support injection method\n"
+ 			"Make sure this is a recent 3DMigoto d3d11.dll\n");
+ 	}
+ 
+ 	hook_proc = find_ini_int_lite(ini_section, "hook_proc", WH_CBT);
+ 	hook = SetWindowsHookEx(hook_proc, (HOOKPROC)fn, module, 0);
+-	if (!hook)
++	if (!hook) {
++		char error[128];
++		sprintf_s(error, "SetWindowsHookEx failed with error %lu", GetLastError());
++		diagnostic_log(error);
+ 		wait_exit(EXIT_FAILURE, "Error installing hook\n");
++	}
++	diagnostic_log("global hook installed; waiting for target process");
+ 
+ 	rc = EXIT_SUCCESS;
+ 

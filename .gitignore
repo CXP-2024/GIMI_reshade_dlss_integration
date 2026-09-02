@@ -1,0 +1,19 @@
+# Build and IDE output
+.vs/
+bin/
+obj/
+*.pdb
+*.ilk
+*.iobj
+*.ipdb
+
+# Runtime/user state
+*.log
+*.backup*
+*.before-*
+user-config/
+local/
+outputs/
+
+# Temporary archives
+*.zip

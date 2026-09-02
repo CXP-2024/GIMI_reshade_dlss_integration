@@ -1,0 +1,5 @@
+# Upstream source snapshots and Git patches intentionally retain upstream
+# whitespace so that the patches remain byte-for-byte applicable.
+src/3dmigoto-patches/*.cpp -whitespace
+src/unlockfps-patches/*.cs -whitespace
+src/patches/*.patch -whitespace

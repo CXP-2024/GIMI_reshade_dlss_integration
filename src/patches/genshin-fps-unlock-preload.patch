@@ -1,0 +1,164 @@
+diff --git a/unlockfps_nc/Model/Config.cs b/unlockfps_nc/Model/Config.cs
+index 04ea93d..1087d4b 100644
+--- a/unlockfps_nc/Model/Config.cs
++++ b/unlockfps_nc/Model/Config.cs
+@@ -31,6 +31,13 @@ namespace unlockfps_nc.Model
+ 
+         public long LastVersionNotify { get; set; } = 0;
+ 
++        // DLLs that must be loaded before the normal plugin list.
++        public List<string> PreloadDlls { get; set; } = new();
++
++        // Legacy field kept for config compatibility. Leave this empty when
++        // GIMI is enabled; put GIMI's d3d11.dll in PreloadDlls instead.
++        public string GimiLoaderPath { get; set; } = "";
++
+         public List<string> DllList { get; set; } = new();
+     }
+ }
+diff --git a/unlockfps_nc/Service/ProcessService.cs b/unlockfps_nc/Service/ProcessService.cs
+index 0ea1d24..7da972c 100644
+--- a/unlockfps_nc/Service/ProcessService.cs
++++ b/unlockfps_nc/Service/ProcessService.cs
+@@ -60,7 +60,18 @@ namespace unlockfps_nc.Service
+             }
+ 
+             STARTUPINFO si = new();
+-            uint creationFlag = _config.SuspendLoad ? 4u : 0u;
++            var gimiCompatibilityMode = !string.IsNullOrWhiteSpace(_config.GimiLoaderPath);
++            var preloadDlls = GetExistingDlls(_config.PreloadDlls)
++                .Where(path => !gimiCompatibilityMode || !IsGimiOwnedOrConflictingGraphicsDll(path))
++                .ToList();
++            var dllList = GetExistingDlls(_config.DllList)
++                .Where(path => !gimiCompatibilityMode || !IsGimiOwnedOrConflictingGraphicsDll(path))
++                .ToList();
++            // A preload DLL must be present before the game's primary thread
++            // can load Direct3D.  Force CREATE_SUSPENDED for this case even
++            // when the legacy SuspendLoad option was left disabled.
++            bool suspendLoad = _config.SuspendLoad || preloadDlls.Count > 0;
++            uint creationFlag = suspendLoad ? 4u : 0u; // CREATE_SUSPENDED
+             var gameFolder = Path.GetDirectoryName(_config.GamePath);
+ 
+             if (!Native.CreateProcess(_config.GamePath, BuildCommandLine(), IntPtr.Zero, IntPtr.Zero, false, creationFlag, IntPtr.Zero, gameFolder, ref si, out var pi)) {
+@@ -70,13 +81,21 @@ namespace unlockfps_nc.Service
+                 return false;
+             }
+ 
+-            if (!ProcessUtils.InjectDlls(pi.hProcess, _config.DllList)) {
++            var injected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
++            var dllsToInject = new List<string>();
++            foreach (var dllPath in preloadDlls.Concat(dllList)) {
++                var fullPath = Path.GetFullPath(dllPath);
++                if (injected.Add(fullPath))
++                    dllsToInject.Add(fullPath);
++            }
++
++            if (!ProcessUtils.InjectDlls(pi.hProcess, dllsToInject)) {
+                 MessageBox.Show(
+                     $@"Dll Injection failed ({Marshal.GetLastWin32Error()}){Environment.NewLine} {Marshal.GetLastPInvokeErrorMessage()}",
+                     @"Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+             }
+ 
+-            if (_config.SuspendLoad)
++            if (suspendLoad)
+                 Native.ResumeThread(pi.hThread);
+ 
+             _gamePid = pi.dwProcessId;
+@@ -151,5 +170,38 @@ namespace unlockfps_nc.Service
+             return commandLine;
+         }
+ 
++        private static bool IsGimiOwnedOrConflictingGraphicsDll(string path)
++        {
++            var fileName = Path.GetFileName(path);
++            return fileName.Equals("d3d11.dll", StringComparison.OrdinalIgnoreCase) ||
++                   fileName.Equals("Dx11FsrBridge.dll", StringComparison.OrdinalIgnoreCase) ||
++                   fileName.Equals("OptiScaler.dll", StringComparison.OrdinalIgnoreCase) ||
++                   fileName.Equals("ReShade64.dll", StringComparison.OrdinalIgnoreCase);
++        }
++
++        private static List<string> GetExistingDlls(IEnumerable<string>? paths)
++        {
++            var result = new List<string>();
++            if (paths == null)
++                return result;
++
++            foreach (var path in paths) {
++                if (string.IsNullOrWhiteSpace(path))
++                    continue;
++
++                try {
++                    var fullPath = Path.GetFullPath(path.Trim());
++                    if (File.Exists(fullPath))
++                        result.Add(fullPath);
++                }
++                catch {
++                    // Ignore malformed optional entries.  The normal unlocker
++                    // behavior is preserved for valid entries.
++                }
++            }
++
++            return result;
++        }
++
+     }
+ }
+diff --git a/unlockfps_nc/Utility/ProcessUtils.cs b/unlockfps_nc/Utility/ProcessUtils.cs
+index d52e8ed..9facbe3 100644
+--- a/unlockfps_nc/Utility/ProcessUtils.cs
++++ b/unlockfps_nc/Utility/ProcessUtils.cs
+@@ -59,25 +59,40 @@ namespace unlockfps_nc.Utility
+             if (remoteVa == IntPtr.Zero)
+                 return false;
+ 
+-            foreach (var dllPath in dllPaths)
++            try
+             {
+-                var nativeString = Marshal.StringToHGlobalUni(dllPath);
+-                var bytes = Encoding.Unicode.GetBytes(dllPath);
+-                Marshal.FreeHGlobal(nativeString);
++                foreach (var dllPath in dllPaths)
++                {
++                    // Include the UTF-16 NUL terminator explicitly.  The old
++                    // implementation reused the remote buffer and only
++                    // cleared the previous string length, so a shorter path
++                    // could inherit trailing characters from the prior DLL.
++                    var bytes = Encoding.Unicode.GetBytes(dllPath + "\0");
+ 
+-                if (!Native.WriteProcessMemory(processHandle, remoteVa, bytes, bytes.Length, out var bytesWritten))
+-                    return false;
++                    if (bytes.Length > 0x1000 ||
++                        !Native.WriteProcessMemory(processHandle, remoteVa, bytes, bytes.Length, out _))
++                        return false;
+ 
+-                var thread = Native.CreateRemoteThread(processHandle, IntPtr.Zero, 0, loadLibrary, remoteVa, 0, out var threadId);
+-                if (thread == IntPtr.Zero)
+-                    return false;
++                    var thread = Native.CreateRemoteThread(processHandle, IntPtr.Zero, 0, loadLibrary, remoteVa, 0, out _);
++                    if (thread == IntPtr.Zero)
++                        return false;
+ 
+-                Native.WaitForSingleObject(thread, uint.MaxValue);
+-                Native.CloseHandle(thread);
+-                Native.WriteProcessMemory(processHandle, remoteVa, new byte[bytes.Length], bytes.Length, out _);
+-            }
++                    try
++                    {
++                        Native.WaitForSingleObject(thread, uint.MaxValue);
++                    }
++                    finally
++                    {
++                        Native.CloseHandle(thread);
++                    }
++                }
+ 
+-            Native.VirtualFreeEx(processHandle, remoteVa, 0, FreeType.RELEASE);
++                return true;
++            }
++            finally
++            {
++                Native.VirtualFreeEx(processHandle, remoteVa, 0, FreeType.RELEASE);
++            }
+ #endif
+             return true;
+         }
