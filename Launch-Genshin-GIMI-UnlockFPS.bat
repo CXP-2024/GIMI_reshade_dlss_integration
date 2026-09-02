@@ -9,7 +9,7 @@ if not exist "%ROOT%unlockfps_nc.exe" (
   exit /b 1
 )
 
-rem First run (or invalid saved paths) opens the two-step path wizard.
+rem First run (or invalid saved paths) opens the path and optional-component wizard.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File "%ROOT%Configure-GIMI-Paths.ps1"
 set "CODE=%ERRORLEVEL%"
 if not "%CODE%"=="0" (
