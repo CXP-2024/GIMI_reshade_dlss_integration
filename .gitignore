@@ -9,11 +9,17 @@ obj/
 
 # Runtime/user state
 *.log
+*.cache
 *.backup*
 *.before-*
 user-config/
 local/
 outputs/
+/state/
+/fps_config.json
+/components/OptiScaler/OptiScaler.ini
+/components/ReShade/cache/
+/components/ReShade/empty-addons/
 
 # Temporary archives
 *.zip

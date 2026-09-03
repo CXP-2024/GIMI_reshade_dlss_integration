@@ -1,0 +1,601 @@
+diff --git a/DirectX11/CommandList.cpp b/DirectX11/CommandList.cpp
+index 6758d9f..a90438b 100644
+--- a/DirectX11/CommandList.cpp
++++ b/DirectX11/CommandList.cpp
+@@ -1739,7 +1739,7 @@ void Draw3DMigotoOverlayCommand::run(CommandListState *state)
+ 	COMMAND_LIST_LOG(state, "[%S] special = draw_3dmigoto_overlay\n", ini_section.c_str());
+ 
+ 	HackerSwapChain *mHackerSwapChain = state->mHackerDevice->GetHackerSwapChain();
+-	if (mHackerSwapChain->mOverlay) {
++	if (mHackerSwapChain && mHackerSwapChain->mOverlay) {
+ 		mHackerSwapChain->mOverlay->DrawOverlay();
+ 		G->suppress_overlay = true;
+ 	}
+diff --git a/DirectX11/HackerDXGI.cpp b/DirectX11/HackerDXGI.cpp
+index 82cfd09..25c0a35 100644
+--- a/DirectX11/HackerDXGI.cpp
++++ b/DirectX11/HackerDXGI.cpp
+@@ -72,6 +72,205 @@
+ #include "profiling.h"
+ #include "cursor.h" // For InstallHookLate
+ 
++#include <mutex>
++
++
++// ReShade is deliberately hosted from the final GIMI Present path instead of
++// being injected as another graphics wrapper.  This keeps ownership of the
++// D3D11 device and swap chain with GIMI while still allowing ReShade to process
++// the fully-modified/upscaled back buffer immediately before it is presented.
++namespace
++{
++using ReShadeCreateEffectRuntimeFn = bool (*)(uint32_t api, void *opaque_device,
++	void *opaque_command_queue, void *opaque_swapchain, const char *config_path,
++	void **out_runtime);
++using ReShadeDestroyEffectRuntimeFn = void (*)(void *runtime);
++using ReShadeUpdateAndPresentEffectRuntimeFn = void (*)(void *runtime);
++
++constexpr uint32_t kReShadeD3D11Api = 0xb000;
++
++static std::wstring GetEnvironmentValue(const wchar_t *name)
++{
++	const DWORD required = GetEnvironmentVariableW(name, nullptr, 0);
++	if (required == 0)
++		return std::wstring();
++
++	std::vector<wchar_t> value(required);
++	const DWORD copied = GetEnvironmentVariableW(name, value.data(), required);
++	if (copied == 0 || copied >= required)
++		return std::wstring();
++	return std::wstring(value.data(), copied);
++}
++
++static void GetHostedReShadeSettings(std::wstring &dll_path, std::wstring &config_path)
++{
++	dll_path = GetEnvironmentValue(L"GIMI_HOSTED_RESHADE_DLL");
++	config_path = GetEnvironmentValue(L"GIMI_HOSTED_RESHADE_CONFIG");
++	if (!dll_path.empty() && !config_path.empty())
++		return;
++
++	// A sidecar next to d3d11.dll makes the hosted runtime independent from the
++	// process that launches UnlockFPS. This is useful for normal Explorer/app
++	// launches where environment variables from the setup terminal are not
++	// necessarily inherited by the game process.
++	wchar_t module_path[MAX_PATH] = {};
++	const DWORD length = GetModuleFileNameW(migoto_handle, module_path, ARRAYSIZE(module_path));
++	if (length == 0 || length >= ARRAYSIZE(module_path))
++		return;
++
++	std::wstring sidecar_path(module_path, length);
++	const size_t separator = sidecar_path.find_last_of(L"\\/");
++	if (separator == std::wstring::npos)
++		return;
++	sidecar_path.resize(separator + 1);
++	sidecar_path += L"GIMIHostedReShade.ini";
++
++	if (GetPrivateProfileIntW(L"HostedReShade", L"Enabled", 0, sidecar_path.c_str()) == 0)
++		return;
++
++	wchar_t value[32768] = {};
++	if (dll_path.empty() && GetPrivateProfileStringW(L"HostedReShade", L"Dll", L"",
++		value, ARRAYSIZE(value), sidecar_path.c_str()) != 0)
++		dll_path.assign(value);
++	if (config_path.empty() && GetPrivateProfileStringW(L"HostedReShade", L"Config", L"",
++		value, ARRAYSIZE(value), sidecar_path.c_str()) != 0)
++		config_path.assign(value);
++
++	if (!dll_path.empty() && !config_path.empty())
++		LogInfo("GIMI hosted ReShade settings loaded from GIMIHostedReShade.ini\n");
++}
++
++static std::string ToUtf8(const std::wstring &value)
++{
++	if (value.empty())
++		return std::string();
++	const int required = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1,
++		nullptr, 0, nullptr, nullptr);
++	if (required <= 1)
++		return std::string();
++	std::string result(static_cast<size_t>(required), '\0');
++	WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, &result[0], required,
++		nullptr, nullptr);
++	result.resize(static_cast<size_t>(required - 1));
++	return result;
++}
++
++class GimiHostedReShadeRuntime
++{
++public:
++	void Present(IDXGISwapChain1 *swap_chain, HackerContext *hacker_context)
++	{
++		if (swap_chain == nullptr || hacker_context == nullptr)
++			return;
++
++		std::lock_guard<std::mutex> lock(mMutex);
++		if (mSwapChain != nullptr && mSwapChain != swap_chain)
++			ResetLocked();
++		mSwapChain = swap_chain;
++
++		if (mRuntime == nullptr && !mInitializationFailed)
++			InitializeLocked(swap_chain, hacker_context);
++		if (mRuntime != nullptr && mUpdateAndPresent != nullptr)
++			mUpdateAndPresent(mRuntime);
++	}
++
++	void Reset()
++	{
++		std::lock_guard<std::mutex> lock(mMutex);
++		ResetLocked();
++	}
++
++private:
++	void InitializeLocked(IDXGISwapChain1 *swap_chain, HackerContext *hacker_context)
++	{
++		std::wstring dll_path;
++		std::wstring config_path;
++		GetHostedReShadeSettings(dll_path, config_path);
++		if (dll_path.empty() || config_path.empty())
++		{
++			mInitializationFailed = true;
++			LogInfo("GIMI hosted ReShade disabled: GIMI_HOSTED_RESHADE_DLL or "
++				"GIMI_HOSTED_RESHADE_CONFIG is not set\n");
++			return;
++		}
++
++		// The DLL must be loaded with its graphics hooks disabled.  Its public
++		// runtime API remains available, but it cannot replace GIMI's objects.
++		SetEnvironmentVariableW(L"RESHADE_DISABLE_GRAPHICS_HOOK", L"1");
++		mModule = LoadLibraryW(dll_path.c_str());
++		if (mModule == nullptr)
++		{
++			mInitializationFailed = true;
++			LogInfo("GIMI hosted ReShade failed to load %s (error %lu)\n",
++				ToUtf8(dll_path).c_str(), GetLastError());
++			return;
++		}
++
++		const auto create = reinterpret_cast<ReShadeCreateEffectRuntimeFn>(
++			GetProcAddress(mModule, "ReShadeCreateEffectRuntime"));
++		mDestroy = reinterpret_cast<ReShadeDestroyEffectRuntimeFn>(
++			GetProcAddress(mModule, "ReShadeDestroyEffectRuntime"));
++		mUpdateAndPresent = reinterpret_cast<ReShadeUpdateAndPresentEffectRuntimeFn>(
++			GetProcAddress(mModule, "ReShadeUpdateAndPresentEffectRuntime"));
++		if (create == nullptr || mDestroy == nullptr || mUpdateAndPresent == nullptr)
++		{
++			mInitializationFailed = true;
++			LogInfo("GIMI hosted ReShade exports are unavailable in %s\n",
++				ToUtf8(dll_path).c_str());
++			return;
++		}
++
++		// Get the device through the exact swap chain passed to ReShade.  The
++		// ReShade C API checks COM pointer identity and rejects a different view.
++		ID3D11Device *device = nullptr;
++		const HRESULT device_hr = swap_chain->GetDevice(IID_PPV_ARGS(&device));
++		if (FAILED(device_hr) || device == nullptr)
++		{
++			mInitializationFailed = true;
++			LogInfo("GIMI hosted ReShade could not get the swap-chain device: %x\n",
++				device_hr);
++			return;
++		}
++
++		ID3D11DeviceContext1 *context = hacker_context->GetPassThroughOrigContext1();
++		std::string utf8_config = ToUtf8(config_path);
++		const bool created = create(kReShadeD3D11Api, device, context, swap_chain,
++			utf8_config.c_str(), &mRuntime);
++		device->Release();
++
++		if (!created || mRuntime == nullptr)
++		{
++			mRuntime = nullptr;
++			mInitializationFailed = true;
++			LogInfo("GIMI hosted ReShade runtime initialization failed for %s\n",
++				utf8_config.c_str());
++			return;
++		}
++
++		LogInfo("GIMI hosted ReShade runtime initialized on final GIMI Present path\n");
++	}
++
++	void ResetLocked()
++	{
++		if (mRuntime != nullptr && mDestroy != nullptr)
++			mDestroy(mRuntime);
++		mRuntime = nullptr;
++		mSwapChain = nullptr;
++		mInitializationFailed = false;
++	}
++
++	std::mutex mMutex;
++	HMODULE mModule = nullptr;
++	IDXGISwapChain1 *mSwapChain = nullptr;
++	void *mRuntime = nullptr;
++	ReShadeDestroyEffectRuntimeFn mDestroy = nullptr;
++	ReShadeUpdateAndPresentEffectRuntimeFn mUpdateAndPresent = nullptr;
++	bool mInitializationFailed = false;
++};
++
++GimiHostedReShadeRuntime gGimiHostedReShadeRuntime;
++}
++
+ 
+ // -----------------------------------------------------------------------------
+ // SetWindowPos hook, activated by full_screen=2 in d3dx.ini
+@@ -349,6 +548,28 @@ STDMETHODIMP HackerSwapChain::QueryInterface(THIS_
+ 		return hr;
+ 	}
+ 
++	// Native HDR swap chains use IDXGISwapChain3/4 to negotiate the HDR
++	// color space (SetColorSpace1) and frame-latency state.  The old GIMI
++	// wrapper deliberately rejected these interfaces because returning the
++	// wrapper with a newer vtable was unsafe for some older games.  Returning
++	// E_NOINTERFACE here prevents Unity/Genshin from completing HDR setup and
++	// leaves a black back buffer.  For the R10G10B10A2 HDR path, expose the
++	// original interface pointer instead; calls that need the newer vtable
++	// then use the DXGI implementation with the correct ABI, while the
++	// IDXGISwapChain1 methods remain handled by this wrapper.
++	DXGI_SWAP_CHAIN_DESC current_desc = {};
++	const bool native_hdr_swap_chain =
++		SUCCEEDED(mOrigSwapChain1->GetDesc(&current_desc)) &&
++		current_desc.BufferDesc.Format == DXGI_FORMAT_R10G10B10A2_UNORM;
++	if (native_hdr_swap_chain &&
++		(riid == __uuidof(IDXGISwapChain2) ||
++		 riid == __uuidof(IDXGISwapChain3) ||
++		 riid == __uuidof(IDXGISwapChain4)))
++	{
++		LogInfo("  exposing native HDR %s interface %p\n", NameFromIID(riid).c_str(), *ppvObject);
++		return hr;
++	}
++
+ 	// For TheDivision, only upon Win10, it will request these.  Even though the object
+ 	// we would return is the exact same pointer in memory, it still calls into the object
+ 	// with a vtable entry that does not match what they expected. Somehow they decide
+@@ -560,6 +781,10 @@ STDMETHODIMP HackerSwapChain::Present(THIS_
+ 		// which enables hunting, and snapshots, and aiming overrides and other inputs
+ 		RunFrameActions();
+ 
++		// ReShade runs after GIMI actions and the upscaler has returned to this
++		// final Present path, but before the original swap chain presents.
++		gGimiHostedReShadeRuntime.Present(mOrigSwapChain1, mHackerContext);
++
+ 		if (profiling)
+ 			Profiling::end(&profiling_state, &Profiling::present_overhead);
+ 	}
+@@ -701,6 +926,36 @@ STDMETHODIMP HackerSwapChain::ResizeBuffers(THIS_
+ 			G->mResolutionInfo.width, G->mResolutionInfo.height);
+ 	}
+ 
++	// ReShade caches views for the current back buffer. Tear down the hosted
++	// runtime before the game recreates those buffers, then reinitialize lazily.
++	gGimiHostedReShadeRuntime.Reset();
++
++	// ReShade (and some other post-processing wrappers) may request an sRGB
++	// format while the game is using the HDR R10G10B10A2 swap chain. Passing
++	// that format through this wrapper makes DXGI reject the resize with
++	// E_INVALIDARG. DXGI_FORMAT_UNKNOWN means "keep the existing format" for
++	// ResizeBuffers, preserving the HDR swap-chain contract.
++	DXGI_SWAP_CHAIN_DESC current_desc = {};
++	if (SUCCEEDED(mOrigSwapChain1->GetDesc(&current_desc)) &&
++		current_desc.BufferDesc.Format == DXGI_FORMAT_R10G10B10A2_UNORM)
++	{
++		if (NewFormat != DXGI_FORMAT_UNKNOWN && NewFormat != current_desc.BufferDesc.Format)
++		{
++			LogInfo("  Preserving HDR swap-chain format %d instead of requested format %d\n",
++				static_cast<int>(current_desc.BufferDesc.Format), static_cast<int>(NewFormat));
++			NewFormat = DXGI_FORMAT_UNKNOWN;
++		}
++		// Flip-model HDR swap chains require at least two buffers. ReShade's
++		// resize path uses BufferCount=1, which is invalid for the original
++		// chain, so retain its existing count as well.
++		if (current_desc.BufferCount >= 2 && BufferCount != 0 && BufferCount < 2)
++		{
++			LogInfo("  Preserving HDR buffer count %u instead of requested count %u\n",
++				current_desc.BufferCount, BufferCount);
++			BufferCount = current_desc.BufferCount;
++		}
++	}
++
+ 	HRESULT hr = mOrigSwapChain1->ResizeBuffers(BufferCount, Width, Height, NewFormat, SwapChainFlags);
+ 
+ 	LogInfo("  returns result = %x\n", hr);
+@@ -867,6 +1122,8 @@ STDMETHODIMP HackerSwapChain::Present1(THIS_
+ 		// which enables hunting, and snapshots, and aiming overrides and other inputs
+ 		RunFrameActions();
+ 
++		gGimiHostedReShadeRuntime.Present(mOrigSwapChain1, mHackerContext);
++
+ 		if (profiling)
+ 			Profiling::end(&profiling_state, &Profiling::present_overhead);
+ 	}
+diff --git a/DirectX11/HookedDXGI.cpp b/DirectX11/HookedDXGI.cpp
+index 53b5087..7cff511 100644
+--- a/DirectX11/HookedDXGI.cpp
++++ b/DirectX11/HookedDXGI.cpp
+@@ -127,6 +127,64 @@ static HackerDevice* prepare_devices_for_dx12_warning(IUnknown *unknown_device)
+ 
+ #endif
+ 
++// Some proxy layers create their DXGI swap chain with the original D3D11
++// device, rather than the device object that was returned by
++// D3D11CreateDevice.  This is valid D3D11 behaviour, but it means the device
++// has not reached the usual wrapping path.  Register it here so the swap chain
++// can still be wrapped and GIMI retains its Present/mod hooks.
++static HackerDevice* wrap_untracked_d3d11_device(IUnknown *unknown_device)
++{
++	ID3D11Device1 *d3d11_device = NULL;
++	ID3D11DeviceContext1 *d3d11_context = NULL;
++	HackerDevice *device_wrap = NULL;
++	HackerContext *context_wrap = NULL;
++
++	if (FAILED(unknown_device->QueryInterface(IID_PPV_ARGS(&d3d11_device))))
++		return NULL;
++
++	d3d11_device->GetImmediateContext1(&d3d11_context);
++	if (!d3d11_context) {
++		LogInfo("Could not obtain ID3D11DeviceContext1 for untracked device %p\n", d3d11_device);
++		d3d11_device->Release();
++		return NULL;
++	}
++
++	device_wrap = new HackerDevice(d3d11_device, d3d11_context);
++	context_wrap = HackerContextFactory(d3d11_device, d3d11_context);
++	if (!context_wrap) {
++		LogInfo("Could not create HackerContext for untracked device %p\n", d3d11_device);
++		return device_wrap;
++	}
++
++	device_wrap->SetHackerContext(context_wrap);
++	context_wrap->SetHackerDevice(device_wrap);
++	// Keep the compatibility path equivalent to the normal
++	// D3D11CreateDevice wrapping path.  In recommended mode GIMI relies on
++	// device hooks to observe shader/resource creation; installing only the
++	// immediate-context hook leaves the swap chain wrapped while the actual
++	// rendering device bypasses mod tracking and shader reload bookkeeping.
++	if (G->enable_hooks & EnableHooks::DEVICE) {
++		device_wrap->HookDevice();
++		LogInfo("Compatibility: installed device hooks for untracked device %p\n", d3d11_device);
++	}
++	// This device was supplied to DXGI outside 3DMigoto's normal
++	// D3D11CreateDevice wrapping path. The game therefore keeps using its
++	// original immediate context, so the compatibility context must install
++	// the same vtable hook as the normal path when immediate-context hooks are
++	// enabled.
++	if (G->enable_hooks & EnableHooks::IMMEDIATE_CONTEXT)
++		context_wrap->HookContext();
++	d3d11_device->SetPrivateData(IID_HackerDevice, sizeof(HackerDevice*), &device_wrap);
++	device_wrap->Create3DMigotoResources();
++	context_wrap->Bind3DMigotoResources();
++	if (!G->constants_run)
++		context_wrap->InitIniParams();
++
++	LogInfo("Compatibility: registered untracked ID3D11Device %p as HackerDevice %p\n",
++		d3d11_device, device_wrap);
++	return device_wrap;
++}
++
+ // Takes an IUnknown device and finds the corresponding HackerDevice and
+ // DirectX device interfaces. The passed in IUnknown may be modified to point
+ // to the real DirectX device so ensure that it will be safe to pass to the
+@@ -169,16 +227,12 @@ static HackerDevice* sort_out_swap_chain_device_mess(IUnknown **device)
+ 		analyse_iunknown(*device);
+ 
+ 		if (check_interface_supported(*device, IID_ID3D11Device)) {
+-			// If we do end up in another situation where we are
+-			// seeing a device for the first time (like
+-			// CreateDeviceAndSwapChain calling back into us), we
+-			// could consider creating our HackerDevice here. But
+-			// for now we aren't expecting this to happen, so treat
+-			// it as fatal if it does.
+-			//
+-			// D3D11On12CreateDevice() could possibly lead us here,
+-			// depending on how that works.
+-			LogInfo("BUG: Unwrapped ID3D11Device!\n");
++			hackerDevice = wrap_untracked_d3d11_device(*device);
++			if (hackerDevice) {
++				*device = hackerDevice->GetPossiblyHookedOrigDevice1();
++				return hackerDevice;
++			}
++			LogInfo("BUG: Unwrapped ID3D11Device could not be wrapped!\n");
+ 			DoubleBeepExit();
+ 		}
+ 
+@@ -574,6 +628,16 @@ HRESULT __stdcall Hooked_CreateSwapChainForHwnd(
+ 
+ 	// Save window handle so we can translate mouse coordinates to the window:
+ 	G->hWnd = hWnd;
++	if (G->skip_swapchain_wrap) {
++		// ReShade owns the HDR presentation chain. Do not replace its device or
++		// swap chain here: GIMI's device/context hooks remain active for mods.
++		LogInfo("  ReShade compatibility: passing CreateSwapChainForHwnd through unwrapped\n");
++		get_tls()->hooking_quirk_protection = true;
++		HRESULT hr = fnOrigCreateSwapChainForHwnd(This, pDevice, hWnd, pDesc,
++			pFullscreenDesc, pRestrictToOutput, ppSwapChain);
++		get_tls()->hooking_quirk_protection = false;
++		return hr;
++	}
+ 
+ 	hackerDevice = sort_out_swap_chain_device_mess(&pDevice);
+ 
+@@ -648,6 +712,14 @@ HRESULT __stdcall Hooked_CreateSwapChainForCoreWindow(
+ 	LogInfo("  Description1 = %p\n", pDesc);
+ 
+ 	// FIXME: Need the hWnd for mouse support
++	if (G->skip_swapchain_wrap) {
++		LogInfo("  ReShade compatibility: passing CreateSwapChainForCoreWindow through unwrapped\n");
++		get_tls()->hooking_quirk_protection = true;
++		HRESULT hr = fnOrigCreateSwapChainForCoreWindow(This, pDevice, pWindow, pDesc,
++			pRestrictToOutput, ppSwapChain);
++		get_tls()->hooking_quirk_protection = false;
++		return hr;
++	}
+ 
+ 	hackerDevice = sort_out_swap_chain_device_mess(&pDevice);
+ 
+@@ -712,6 +784,14 @@ HRESULT __stdcall Hooked_CreateSwapChainForComposition(
+ 	LogInfo("  Description1 = %p\n", pDesc);
+ 
+ 	// FIXME: Need the hWnd for mouse support
++	if (G->skip_swapchain_wrap) {
++		LogInfo("  ReShade compatibility: passing CreateSwapChainForComposition through unwrapped\n");
++		get_tls()->hooking_quirk_protection = true;
++		HRESULT hr = fnOrigCreateSwapChainForComposition(This, pDevice, pDesc,
++			pRestrictToOutput, ppSwapChain);
++		get_tls()->hooking_quirk_protection = false;
++		return hr;
++	}
+ 
+ 	hackerDevice = sort_out_swap_chain_device_mess(&pDevice);
+ 
+@@ -845,6 +925,14 @@ HRESULT __stdcall Hooked_CreateSwapChain(
+ 	LogInfo("  Device = %p\n", pDevice);
+ 	LogInfo("  SwapChain = %p\n", ppSwapChain);
+ 	LogInfo("  Description = %p\n", pDesc);
++	if (G->skip_swapchain_wrap) {
++		// Keep the original DXGI object graph intact for ReShade's hook chain.
++		LogInfo("  ReShade compatibility: passing CreateSwapChain through unwrapped\n");
++		get_tls()->hooking_quirk_protection = true;
++		HRESULT hr = fnOrigCreateSwapChain(This, pDevice, pDesc, ppSwapChain);
++		get_tls()->hooking_quirk_protection = false;
++		return hr;
++	}
+ 
+ 	HackerDevice *hackerDevice = NULL;
+ 	DXGI_SWAP_CHAIN_DESC origSwapChainDesc;
+diff --git a/DirectX11/IniHandler.cpp b/DirectX11/IniHandler.cpp
+index 2c88983..cca0036 100644
+--- a/DirectX11/IniHandler.cpp
++++ b/DirectX11/IniHandler.cpp
+@@ -4154,6 +4154,7 @@ void LoadConfigFile()
+ 	G->enable_check_interface = GetIniBool(L"System", L"allow_check_interface", false, NULL);
+ 	G->enable_create_device = GetIniInt(L"System", L"allow_create_device", 0, NULL);
+ 	G->enable_platform_update = GetIniBool(L"System", L"allow_platform_update", false, NULL);
++	G->skip_swapchain_wrap = GetIniBool(L"System", L"skip_swapchain_wrap", false, NULL);
+ 	// TODO: Enable this by default if wider testing goes well:
+ 	G->check_foreground_window = GetIniBool(L"System", L"check_foreground_window", false, NULL);
+ 
+diff --git a/DirectX11/globals.h b/DirectX11/globals.h
+index 111e77c..bdf0bbf 100644
+--- a/DirectX11/globals.h
++++ b/DirectX11/globals.h
+@@ -418,6 +418,9 @@ struct Globals
+ 	bool enable_check_interface;
+ 	int enable_create_device;
+ 	bool enable_platform_update;
++	// Leave DXGI swap-chain ownership to an external presentation layer
++	// (for example ReShade), while retaining GIMI's device/context hooks.
++	bool skip_swapchain_wrap;
+ 
+ 	int GAME_INTERNAL_WIDTH; // this variable stores the resolution width provided by the game (required for the upscaling feature)
+ 	int GAME_INTERNAL_HEIGHT; // this variable stores the resolution height provided by the game (required for the upscaling feature)
+@@ -688,6 +691,7 @@ struct Globals
+ 		enable_check_interface(false),
+ 		enable_create_device(0),
+ 		enable_platform_update(false),
++		skip_swapchain_wrap(false),
+ 		gInitialized(false),
+ 		bIntendedTargetExe(false),
+ 		gReloadConfigPending(false),
+diff --git a/Injector/Injector.cpp b/Injector/Injector.cpp
+index db238c3..065fa01 100755
+--- a/Injector/Injector.cpp
++++ b/Injector/Injector.cpp
+@@ -10,6 +10,38 @@
+ #include <tlhelp32.h>
+ #include <set>
+ 
++static void diagnostic_log(const char *message)
++{
++	char executable_path[MAX_PATH], line[512];
++	char *separator;
++	HANDLE file;
++	DWORD written;
++	SYSTEMTIME timestamp;
++
++	if (!GetModuleFileNameA(NULL, executable_path, MAX_PATH))
++		return;
++
++	separator = strrchr(executable_path, '\\');
++	if (!separator)
++		return;
++
++	*separator = '\0';
++	strcat_s(executable_path, "\\3DMigotoLoader-debug.log");
++	GetLocalTime(&timestamp);
++	sprintf_s(line, "%04u-%02u-%02u %02u:%02u:%02u | %s\\r\\n",
++		timestamp.wYear, timestamp.wMonth, timestamp.wDay,
++		timestamp.wHour, timestamp.wMinute, timestamp.wSecond, message);
++
++	file = CreateFileA(executable_path, FILE_APPEND_DATA,
++		FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS,
++		FILE_ATTRIBUTE_NORMAL, NULL);
++	if (file == INVALID_HANDLE_VALUE)
++		return;
++
++	WriteFile(file, line, (DWORD)strlen(line), &written, NULL);
++	CloseHandle(file);
++}
++
+ static void wait_keypress(const char *msg)
+ {
+ 	puts(msg);
+@@ -211,7 +243,10 @@ static bool check_for_running_target(wchar_t *target, const wchar_t *module)
+ 		if (_wcsicmp(pe.szExeFile, basename))
+ 			continue;
+ 
++		diagnostic_log("matching target process found");
+ 		rc = verify_injection(&pe, module, !pids.count(pe.th32ProcessID)) || rc;
++		if (rc)
++			diagnostic_log("3DMigoto module found in target process");
+ 		pids.insert(pe.th32ProcessID);
+ 	} while (Process32Next(snapshot, &pe));
+ 
+@@ -316,6 +351,7 @@ int main()
+ 	FARPROC fn;
+ 	HHOOK hook;
+ 	bool launch;
++	diagnostic_log("loader process entered main");
+ 
+ 	CreateMutexA(0, FALSE, "Local\\3DMigotoLoader");
+ 	if (GetLastError() == ERROR_ALREADY_EXISTS)
+@@ -351,6 +387,7 @@ int main()
+ 
+ 	if (!find_ini_setting_lite(ini_section, "module", module_path, MAX_PATH))
+ 		exit_usage("d3dx.ini [Loader] section missing required \"module\" setting\n");
++	diagnostic_log("loader configuration parsed");
+ 
+ 	// We've had support for this injection method in 3DMigoto since 1.3.5,
+ 	// however until 1.3.15 it lacked the check in DllMain to bail out of
+@@ -367,9 +404,11 @@ int main()
+ 
+ 	module = LoadLibraryA(module_path);
+ 	if (!module) {
++		diagnostic_log("failed to load configured 3DMigoto module");
+ 		printf("Unable to load 3DMigoto \"%s\"\n", module_path);
+ 		wait_exit(EXIT_FAILURE);
+ 	}
++	diagnostic_log("configured 3DMigoto module loaded");
+ 
+ 	GetModuleFileName(module, module_full_path, MAX_PATH);
+ 	printf("Loaded %S\n\n", module_full_path);
+@@ -379,14 +418,20 @@ int main()
+ 	else
+ 		fn = GetProcAddress(module, "CBTProc");
+ 	if (!fn) {
++		diagnostic_log("configured module does not export hook entry point");
+ 		wait_exit(EXIT_FAILURE, "Module does not support injection method\n"
+ 			"Make sure this is a recent 3DMigoto d3d11.dll\n");
+ 	}
+ 
+ 	hook_proc = find_ini_int_lite(ini_section, "hook_proc", WH_CBT);
+ 	hook = SetWindowsHookEx(hook_proc, (HOOKPROC)fn, module, 0);
+-	if (!hook)
++	if (!hook) {
++		char error[128];
++		sprintf_s(error, "SetWindowsHookEx failed with error %lu", GetLastError());
++		diagnostic_log(error);
+ 		wait_exit(EXIT_FAILURE, "Error installing hook\n");
++	}
++	diagnostic_log("global hook installed; waiting for target process");
+ 
+ 	rc = EXIT_SUCCESS;
+ 

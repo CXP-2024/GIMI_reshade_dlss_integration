@@ -17,21 +17,16 @@ index 04ea93d..1087d4b 100644
      }
  }
 diff --git a/unlockfps_nc/Service/ProcessService.cs b/unlockfps_nc/Service/ProcessService.cs
-index 0ea1d24..7da972c 100644
+index 0ea1d24..ff0eedb 100644
 --- a/unlockfps_nc/Service/ProcessService.cs
 +++ b/unlockfps_nc/Service/ProcessService.cs
-@@ -60,7 +60,18 @@ namespace unlockfps_nc.Service
+@@ -60,7 +60,13 @@ namespace unlockfps_nc.Service
              }
  
              STARTUPINFO si = new();
 -            uint creationFlag = _config.SuspendLoad ? 4u : 0u;
-+            var gimiCompatibilityMode = !string.IsNullOrWhiteSpace(_config.GimiLoaderPath);
-+            var preloadDlls = GetExistingDlls(_config.PreloadDlls)
-+                .Where(path => !gimiCompatibilityMode || !IsGimiOwnedOrConflictingGraphicsDll(path))
-+                .ToList();
-+            var dllList = GetExistingDlls(_config.DllList)
-+                .Where(path => !gimiCompatibilityMode || !IsGimiOwnedOrConflictingGraphicsDll(path))
-+                .ToList();
++            var preloadDlls = GetExistingDlls(_config.PreloadDlls);
++            var dllList = GetExistingDlls(_config.DllList);
 +            // A preload DLL must be present before the game's primary thread
 +            // can load Direct3D.  Force CREATE_SUSPENDED for this case even
 +            // when the legacy SuspendLoad option was left disabled.
@@ -40,7 +35,7 @@ index 0ea1d24..7da972c 100644
              var gameFolder = Path.GetDirectoryName(_config.GamePath);
  
              if (!Native.CreateProcess(_config.GamePath, BuildCommandLine(), IntPtr.Zero, IntPtr.Zero, false, creationFlag, IntPtr.Zero, gameFolder, ref si, out var pi)) {
-@@ -70,13 +81,21 @@ namespace unlockfps_nc.Service
+@@ -70,13 +76,21 @@ namespace unlockfps_nc.Service
                  return false;
              }
  
@@ -64,19 +59,10 @@ index 0ea1d24..7da972c 100644
                  Native.ResumeThread(pi.hThread);
  
              _gamePid = pi.dwProcessId;
-@@ -151,5 +170,38 @@ namespace unlockfps_nc.Service
+@@ -151,5 +165,29 @@ namespace unlockfps_nc.Service
              return commandLine;
          }
  
-+        private static bool IsGimiOwnedOrConflictingGraphicsDll(string path)
-+        {
-+            var fileName = Path.GetFileName(path);
-+            return fileName.Equals("d3d11.dll", StringComparison.OrdinalIgnoreCase) ||
-+                   fileName.Equals("Dx11FsrBridge.dll", StringComparison.OrdinalIgnoreCase) ||
-+                   fileName.Equals("OptiScaler.dll", StringComparison.OrdinalIgnoreCase) ||
-+                   fileName.Equals("ReShade64.dll", StringComparison.OrdinalIgnoreCase);
-+        }
-+
 +        private static List<string> GetExistingDlls(IEnumerable<string>? paths)
 +        {
 +            var result = new List<string>();
