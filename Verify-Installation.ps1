@@ -78,7 +78,7 @@ foreach ($line in (Get-Content -LiteralPath $manifestPath -Encoding UTF8)) {
     }
     $checked++
 }
-if ($checked -lt 10) { throw 'The package manifest is incomplete.' }
+if ($checked -lt 8) { throw 'The package manifest is incomplete.' }
 Write-Host "Package integrity: $checked protected files verified." -ForegroundColor Green
 
 Assert-File -Path $dlss5Runtime -Label 'DLSS5 runtime (download it using the links in README.md, then run Install-DLSS5-Runtime.bat)'

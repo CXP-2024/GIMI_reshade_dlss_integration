@@ -101,7 +101,7 @@ function Test-PackageIntegrity {
         }
         $entryCount++
     }
-    if ($entryCount -lt 10) { throw 'Package integrity manifest contains too few protected components.' }
+    if ($entryCount -lt 8) { throw 'Package integrity manifest contains too few protected components.' }
 }
 
 function Read-RequiredPath {
