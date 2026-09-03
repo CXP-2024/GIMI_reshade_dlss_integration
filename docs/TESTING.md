@@ -1,6 +1,6 @@
 # 实机验证记录
 
-验证日期：2026-09-03。此页区分“DLL 成功加载”和“功能实际逐帧运行”；后者才算通过。
+验证日期：2026-09-04。此页区分“DLL 成功加载”和“功能实际逐帧运行”；后者才算通过。
 
 ## 验证环境
 
@@ -11,6 +11,7 @@
 - Bridge `Fsr2TranslationMode=2`、渲染精度 0.8
 - OptiScaler `Dx11Upscaler=dlss`、`LoadReShade=false`
 - ReShade 6.8.0，由 GIMI Hosted Runtime 执行
+- DLSS5 Bridge 私有 D3D12 NGX 会话；RenoDX DLSSNR v310.8.0
 
 ## 已通过项目
 
@@ -47,11 +48,26 @@ Target Size: 3840x2160, Display Size: 3840x2160
 
 这排除了 FSR Fallback 和只加载 `nvngx_dlss.dll` 的假阳性。
 
-### 三组件共存
+### DLSS5 Native NR 真实执行
+
+v1.1 配置的低分辨率探测先返回 `0xBAD00005`，随后保留标准 DLSS 输出并切换到输出分辨率：
+
+```text
+created inline NR resources 1920x1080 -> 3840x2160 (upscaling)
+feature 18 evaluate failed with 0xbad00005; the game DLSS output was retained
+NR upscaling fell back to native
+created inline NR resources 3840x2160 -> 3840x2160 (native)
+inline feature 18 evaluation succeeded (count=1, ... [native])
+inline feature 18 evaluation succeeded (count=60, ... [native])
+```
+
+用户同时确认 `F6` 切换对光影有实际影响。`count=60` 证明 r12 已跨过旧版本只处理三个持久输出资源的状态。
+
+### 四组件共存
 
 - Bridge 和 OptiScaler 持续分发时，GIMI 没有触发旧的 unwrapped-device 致命退出；
 - GIMI 保持最终 Present 所有权，并在其后半段执行 ReShade Runtime；
-- ReShade 不在 `DllList` 中，`RESHADE_DISABLE_GRAPHICS_HOOK=1`；
+- `DllList` 中的 ReShade 只作为被动 Add-on Host，`RESHADE_DISABLE_GRAPHICS_HOOK=1`；最终可见 Runtime 仍由 GIMI 托管；
 - `Home` 使用 ReShade 输入路径，`Insert` 使用 OptiScaler 菜单路径；
 - 用户在共享实机画面中确认组合已经正常工作。
 
@@ -65,8 +81,9 @@ Target Size: 3840x2160, Display Size: 3840x2160
 4. 日志确认 `NVSDK_NGX_D3D11_EvaluateFeature` 持续递增；
 5. 确认 GIMI Mod 可见，并执行一次 `F10`；
 6. `Home` 打开 ReShade，启停一种效果确认最终画面发生变化；
-7. 修改分辨率或窗口模式，确认 Resize 后三者仍恢复；
-8. 正常退出，检查日志没有未处理异常。
+7. `F6` 切换 NR，确认画面变化，且 `Successful NR frames` 持续增长；
+8. 修改分辨率或窗口模式，确认 Resize 后四者仍恢复；
+9. 正常退出，运行 `Verify-Installation.bat` 的最后运行诊断。
 
 ## 当前验证边界
 

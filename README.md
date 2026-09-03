@@ -1,89 +1,87 @@
-# GIMI + DLSS + ReShade Hosted Integration
+# GIMI + DLSS + DLSS 5 Neural Rendering + ReShade
 
-在原神 DirectX 11 渲染链中同时运行 GIMI Mod、真正的 NVIDIA DLSS 和 ReShade HDR 效果。新版不再依赖脆弱的 DLL 排序，而是明确分配每个组件对渲染对象与最终画面的所有权。
+这是原神 DX11 下的四组件兼容整合：GIMI Mod、DLSS 空间超分、DLSS 5 Neural Rendering（RenoDX）与 ReShade 后处理可以在同一局游戏中持续工作。2026-09-04 的 r12 已完成实机验证：GIMI Mod 与 ReShade 正常，标准 DLSS 保持低分辨率到输出分辨率的超分，Native NR 成功帧数连续增长并产生可见的光影变化。
 
-> 2026-09-03 已完成实机验证：游戏持续渲染，Bridge 连续分发 FSR2 输入，OptiScaler 逐帧调用 `NVSDK_NGX_D3D11_EvaluateFeature`，ReShade 由 GIMI 的最终 `Present` 路径执行。本次验证为 3072×1728 输入到 3840×2160 输出。
+## 下载后能否直接运行
+
+有两种发布形式：
+
+- **Downloads 完整离线压缩包**：已经包含经验证的 `nvngx_dlssnr.dll`，解压后可直接配置并启动。
+- **GitHub 仓库 / Source ZIP**：由于 `nvngx_dlssnr.dll` 约 158 MiB，不放入 GitHub。需要先下载该文件并双击 `Install-DLSS5-Runtime.bat`；脚本会校验 SHA-256 并放到正确目录。
+
+DLSS 5 Runtime 下载：
+
+- 国外 / Google Drive：[nvngx_dlssnr.dll](https://drive.google.com/file/d/1L7Pi4adSQal_OxpEzTMuT0NfeQTKIK-_/view?usp=sharing)
+- 国内 / 百度网盘：[nvngx_dlssnr.dll](https://pan.baidu.com/s/1SAm1-QL0YvH8Kc28OGigAA?pwd=qisz)，提取码 `qisz`
+- 必须匹配的 SHA-256：`4C5BD1171C7336B4B04FB394DE51DA285AB6EAD6F922D7AFDEC163F71C319D74`
+
+除此以外，ReShade、Dx11FsrBridge、OptiScaler、普通 DLSS DLL、DLSS5 DX11 Bridge 与 RenoDX Add-on 都已随仓库提供，不需要提前单独安装。
+
+## 前置条件
+
+- Windows 10/11 与支持 DLSS 的 NVIDIA RTX 显卡；显卡驱动需能正常使用 NVIDIA NGX。
+- 已安装并能正常启动的原神客户端。
+- **已有 GIMI / 3DMigoto 目录**，其中至少有 `3DMigoto Loader.exe`、`d3dx.ini`；你的 `Mods` 继续保留在该目录。本仓库不会替你下载游戏或 Mod。
+- 启动前完全退出原神、`3DMigoto Loader.exe` 和旧的 `unlockfps_nc.exe`。
 
 ## 快速开始
 
-要求：Windows 10/11、支持 DLSS 的 NVIDIA RTX 显卡、可正常运行的原神与 GIMI。仓库不包含游戏文件或你的 Mod。
-
-1. 下载或克隆整个仓库，不要只下载某个 BAT。
-2. 完全退出原神、旧 UnlockFPS 和 `3DMigoto Loader.exe`。
+1. 下载完整离线包，或下载 GitHub 仓库并安装上面的 DLSS 5 Runtime。
+2. 解压到普通的可写目录，不要在压缩包预览窗口内运行。
 3. 双击 `Launch-Genshin-GIMI-DLSS-ReShade.bat`。
-4. 首次运行输入 `GenshinImpact.exe` 的完整路径。
-5. 输入现有 GIMI 的 `3dmigoto` 文件夹；它应包含 `3DMigoto Loader.exe`、`d3dx.ini` 和 `Mods`。
-6. 以后继续使用同一个 BAT；路径变化时运行 `Configure-Again.bat`。
+4. 首次运行时输入 `GenshinImpact.exe` 的完整路径，再输入现有 GIMI 的 `3dmigoto` 目录。
+5. 以后始终通过同一个 BAT 启动；路径改变时运行 `Configure-Again.bat`。
+6. `Insert` 打开 OptiScaler；`Home` 打开最终画面的 ReShade；`F6` 切换 Neural Rendering；`F10` 重载 GIMI Mod。
 
-不要额外运行 `3DMigoto Loader.exe`。新版已经由 UnlockFPS 在恢复游戏主线程前预加载 GIMI，重复加载会造成 Hook 冲突。
+不要再单独启动 `3DMigoto Loader.exe`，也不要额外安装一个 ReShade `dxgi.dll` / `d3d11.dll` 到游戏目录。多一层图形 Hook 会重新引入本项目已经解决的所有权冲突。
 
-完整安装、备份恢复和常见问题见 [`docs/INSTALLATION.md`](docs/INSTALLATION.md)。
+完整步骤和恢复方式见 [`docs/INSTALLATION.md`](docs/INSTALLATION.md)。
 
-## 新版渲染链
+## 实际生效的渲染链
 
 ```text
-GIMI d3d11 预加载
-    ↓
-Dx11FsrBridge 捕获并翻译原神 FSR2 输入
-    ↓
-OptiScaler 调用 NVIDIA NGX / DLSS
-    ↓
-GIMI 完成 Mod 操作并进入最终 Present
-    ↓
-GIMI 调用 ReShade 公共 C Runtime 处理最终 back buffer
-    ↓
-原始 DXGI Present
+原神 DX11 / FSR2 carrier
+  -> GIMI d3d11 预加载并成为唯一 DX11/SwapChain/Present 所有者
+  -> 被动 ReShade Add-on Host（禁用图形 Hook）注册 DLSS5 Bridge
+  -> Dx11FsrBridge 提取颜色、深度、运动向量
+  -> OptiScaler + nvngx_dlss.dll 执行标准 DLSS 空间超分
+  -> DLSS5 DX11 Bridge 建立私有 DX12 NGX 会话
+  -> RenoDX DLSS5 在最终分辨率执行 Native NR
+  -> GIMI 绘制 Mod 并提交最终 Present
+  -> GIMI 托管的 ReShade 执行最终效果与 UI
 ```
 
-最关键的变化是：`ReShade64.dll` **不在** UnlockFPS 的 `DllList` 中，也不安装 D3D11/DXGI 图形 Hook。GIMI 在自己的最终 `Present` 中创建并更新 ReShade Runtime。ReShade 仍保留输入 Hook，因此 `Home` 菜单可用，但不会再和 GIMI、OptiScaler 争夺 Device、Context、SwapChain 或 Present。
+这里的“DLSS5”不是再做一次空间超分。v1.1 控制配置会先请求低分辨率 NR；当前签名 Runtime 对原神的该颜色契约返回 `0xBAD00005`。Add-on 会保留已经完成的游戏 DLSS 输出，并自动改为输出分辨率的 Native NR。健康状态因此是：菜单可能显示 `Upscaling: requested ON | active OFF | ratio 1.00`，同时 `Successful NR frames` 持续增长。这不是假成功或退回无效果。
 
-架构、对象所有权和调用时序见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
+## r12 解决了什么
 
-## 本版修复
+- GIMI 先于其他组件预加载，并独占真实 D3D11 Device、Context、SwapChain 与最终 Present；ReShade 图形 Hook 被显式关闭。
+- GIMI 能包装外部创建的 D3D11 对象，并通过私有 ABI 向 OptiScaler 提供原始 Context，修复 NGX `BAD00007 / NotInitialized`。
+- OptiScaler 的 DX11 Present 路径现在检查当前 Feature 的 API 类型，避免把 D3D11 Context 当成私有 D3D12 Command Queue。此前看似发生在 `PSSetConstantBuffers` 的崩溃，本质是跨 API 指针误用。
+- DLSS5 Bridge 先建立私有 DX12 NGX 会话，再延迟加载 RenoDX，确保其能够截获对应 NGX 调用。
+- 最关键的 r12 修复位于 Hosted ReShade：公共 Runtime 更新路径会补发正常 SwapChain Present 才有的 `execute_command_list` 与 `present` Add-on 事件。RenoDX 的逐帧 one-pass mask 因而会重置，成功 NR 帧不再停在三个持久输出资源。
+- 最终 ReShade 仍由 GIMI 在完成的画面上托管，GIMI、DLSS、DLSS5 与 ReShade 不需要争夺注册或 Hook 顺序。
 
-- GIMI 遇到其他组件创建的、尚未登记的 D3D11 Device 时，不再执行致命退出，而是补建 `HackerDevice` / `HackerContext`。
-- 外部 Device 同时安装 Device 与 immediate Context Hook；仅包装 SwapChain 已不足以维持 Mod 资源和 Shader 跟踪。
-- OptiScaler 识别 GIMI COM 包装器，并在 NGX 初始化、创建和执行 Feature 时解析原生 D3D11 Device/Context，修复 `BAD00007 / NotInitialized`。
-- ReShade 使用其公开 C Runtime API，由 GIMI 在最终画面阶段调用；图形 Hook 被显式禁用。
-- `GIMIHostedReShade.ini` 提供环境变量之外的持久配置后备，直接从资源管理器启动也能找到 DLL 和配置。
-- HDR SwapChain 可暴露原生 `IDXGISwapChain2/3/4`，并在 Resize 时保留 HDR 格式与合法的 back-buffer 数量。
-- ReShade 配置、效果缓存、截图和预设都留在整合目录，不向游戏目录复制 ReShade 文件。
-- 启动器只对所选 GIMI 做带时间戳备份后替换兼容 DLL，并保留用户现有 `Mods`、`ShaderFixes` 和其他资源。
+源码修改与对象所有权详见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)，复现构建见 [`docs/BUILD.md`](docs/BUILD.md)。
 
-## 快捷键
+## 如何验收
 
-- `Insert`：OptiScaler 菜单。
-- `Home`：ReShade 菜单。
-- `F10`：重新加载 GIMI Mod。
+游戏正常运行一段时间后退出，再双击 `Verify-Installation.bat`，或运行：
 
-默认预设包含 `FakeHDR`。若 Windows HDR 与游戏原生 HDR 已开启而画面主观上过亮，可在 `Home` 菜单中关闭它，或切换到包内 Lilium 的 HDR-aware 效果；这是预设选择，不代表兼容链路失败。
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Verify-Installation.ps1 -LastRun
+```
 
-## 如何确认不是“假成功”
+真正成功需要同时满足：
 
-只有出现 ReShade 横幅或加载了 DLL 还不够。有效的 DLSS 证据是：
+- `Dx11FsrBridge.log` 持续记录 FSR2 translation dispatch；
+- `OptiScaler.log` 持续执行标准 DLSS，输入分辨率小于输出分辨率；
+- ReShade 日志先记录低分辨率 NR 被拒绝并切到 native，随后出现 `inline feature 18 evaluation succeeded`；
+- `Successful NR frames` 不停在 `3`，而是持续增长（验证脚本要求日志里至少到 `count=60`）；
+- GIMI Mod、`F10` 重载、ReShade `Home` 菜单及效果均正常。
 
-- `components/Bridge/Dx11FsrBridge.log` 持续出现 `fsr2_translation_dispatch_succeeded`；
-- `components/OptiScaler/OptiScaler.log` 出现 `NVSDK_NGX_D3D11_EvaluateFeature`，并列出内部和目标分辨率；
-- 菜单显示 DLSS 而不是 Fallback，进入大世界后仍持续调用；
-- GIMI Mod 可见，`F10` 可重新加载；
-- `Home` 能打开 ReShade，启停效果会改变最终画面。
+详见 [`docs/TESTING.md`](docs/TESTING.md)。
 
-详细验收记录见 [`docs/TESTING.md`](docs/TESTING.md)。
+## 风险说明
 
-## 仓库内容
-
-- `Configure-And-Launch.ps1`：路径向导、备份、运行时配置和启动逻辑。
-- `GIMI/d3d11.dll`：带外部 Device、HDR 和 Hosted ReShade 修复的 GIMI 构建。
-- `components/Bridge/`：原神 FSR2 输入桥接层。
-- `components/OptiScaler/`：OptiScaler、DLSS Runtime 及其依赖和许可证。
-- `components/ReShade/`：ReShade Runtime、效果文件、纹理和许可证。
-- `src/patches/`：可审阅、可应用的 3Dmigoto、OptiScaler 与 UnlockFPS 补丁。
-- `third_party/`：上游版本、来源与许可证说明。
-
-构建方法见 [`docs/BUILD.md`](docs/BUILD.md)。
-
-## 安全与兼容性说明
-
-这是第三方游戏修改工具整合，不是 HoYoverse、NVIDIA、ReShade 或各上游项目的官方产品。游戏更新可能使 Bridge 的 RVA 失效；请不要把旧地址强行用于新版本。请自行确认账号、服务条款和在线环境风险。
-
-本仓库的整合脚本和文档使用 MIT 许可证；第三方源码与二进制保留各自许可证，详见 [`third_party/UPSTREAM-COMMITS.md`](third_party/UPSTREAM-COMMITS.md)。
+这是第三方游戏修改工具整合，不是 HoYoverse、NVIDIA、ReShade 或各上游项目的官方产品。游戏更新可能使 Bridge 的 RVA 失效；请自行确认服务条款、账号与在线使用风险。第三方二进制和源码修改保留各自许可证，来源见 [`third_party/UPSTREAM-COMMITS.md`](third_party/UPSTREAM-COMMITS.md)。

@@ -4,8 +4,8 @@ param(
     [string]$GimiPath,
     [switch]$ConfigureOnly,
     [switch]$ForceConfigure,
-    [ValidateSet('Full', 'NoGimi', 'GimiReShade', 'GimiBridge', 'GimiBridgeHostedReShade')]
-    [string]$TestProfile = 'GimiBridgeHostedReShade'
+    [ValidateSet('StableNativeNR')]
+    [string]$TestProfile = 'StableNativeNR'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -25,7 +25,22 @@ $reShadeDirectory = Join-Path $root 'components\ReShade'
 $reShadeDll = Join-Path $reShadeDirectory 'ReShade64.dll'
 $reShadeIniTemplate = Join-Path $reShadeDirectory 'ReShade.ini'
 $reShadePreset = Join-Path $reShadeDirectory 'ReShadePreset.ini'
+$dlss5AddonDirectory = Join-Path $root 'components\DLSS5\Addons'
+$dlss5BridgeAddonDirectory = Join-Path $dlss5AddonDirectory 'bridge-addons'
+$dlss5DeferredRenoDirectory = Join-Path $dlss5BridgeAddonDirectory 'deferred-reno'
+$dlss5BridgeAddon = Join-Path $dlss5BridgeAddonDirectory 'dlss5-dx11-bridge.addon64'
+$dlss5RenoDxAddon = Join-Path $dlss5DeferredRenoDirectory 'renodx-dlss5.addon64'
+$dlss5Runtime = Join-Path $dlss5DeferredRenoDirectory 'nvngx_dlssnr.dll'
+$dlss5RuntimeSha256 = '4C5BD1171C7336B4B04FB394DE51DA285AB6EAD6F922D7AFDEC163F71C319D74'
+$dlss5RuntimeGoogleDrive = 'https://drive.google.com/file/d/1L7Pi4adSQal_OxpEzTMuT0NfeQTKIK-_/view?usp=sharing'
+$dlss5RuntimeBaidu = 'https://pan.baidu.com/s/1SAm1-QL0YvH8Kc28OGigAA?pwd=qisz'
+$manifestPath = Join-Path $root 'package-manifest.sha256'
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+
+function Test-Dlss5Profile {
+    param([string]$Profile)
+    return $Profile -eq 'StableNativeNR'
+}
 
 function Write-Status {
     param([string]$Message, [ConsoleColor]$Color = [ConsoleColor]::Cyan)
@@ -44,6 +59,16 @@ function Assert-File {
     }
 }
 
+function Assert-Dlss5Runtime {
+    if (-not (Test-Path -LiteralPath $dlss5Runtime -PathType Leaf)) {
+        throw "DLSS5 runtime is missing. Download nvngx_dlssnr.dll, then run Install-DLSS5-Runtime.bat or place it at '$dlss5Runtime'. International: $dlss5RuntimeGoogleDrive ; China: $dlss5RuntimeBaidu (code: qisz)"
+    }
+    $actualHash = Get-Sha256 -Path $dlss5Runtime
+    if (-not $actualHash.Equals($dlss5RuntimeSha256, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "DLSS5 runtime hash mismatch. Expected $dlss5RuntimeSha256, got $actualHash. Download the validated nvngx_dlssnr.dll again."
+    }
+}
+
 function Get-Sha256 {
     param([string]$Path)
     $sha256 = [System.Security.Cryptography.SHA256]::Create()
@@ -54,10 +79,41 @@ function Get-Sha256 {
     }
 }
 
+function Test-PackageIntegrity {
+    Assert-File -Path $manifestPath -Label 'Package integrity manifest'
+    $entryCount = 0
+    foreach ($line in (Get-Content -LiteralPath $manifestPath -Encoding UTF8)) {
+        $trimmed = $line.Trim()
+        if ([string]::IsNullOrWhiteSpace($trimmed) -or $trimmed.StartsWith('#')) { continue }
+        $parts = $trimmed.Split('|', 2)
+        if ($parts.Count -ne 2 -or [string]::IsNullOrWhiteSpace($parts[0]) -or [string]::IsNullOrWhiteSpace($parts[1])) {
+            throw "Invalid package manifest entry: $line"
+        }
+        $relativePath = $parts[0].Trim()
+        if ($relativePath.Contains('..') -or [IO.Path]::IsPathRooted($relativePath)) {
+            throw "Unsafe package manifest path: $relativePath"
+        }
+        $path = Join-Path $root $relativePath
+        Assert-File -Path $path -Label "Manifest component '$relativePath'"
+        $actualHash = Get-Sha256 -Path $path
+        if (-not $actualHash.Equals($parts[1].Trim(), [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Package integrity check failed for '$relativePath'. Expected $($parts[1].Trim()), got $actualHash. Re-extract the archive before continuing."
+        }
+        $entryCount++
+    }
+    if ($entryCount -lt 10) { throw 'Package integrity manifest contains too few protected components.' }
+}
+
 function Read-RequiredPath {
     param([string]$Prompt, [bool]$ExpectDirectory)
     while ($true) {
-        $candidate = (Read-Host $Prompt).Trim().Trim('"')
+        # A Codex-launched PowerShell session has no interactive stdin. Avoid a
+        # null .Trim() crash and make the missing invocation arguments explicit.
+        $rawCandidate = Read-Host $Prompt
+        if ($null -eq $rawCandidate) {
+            throw "No interactive input is available for '$Prompt'. Supply the path as a launcher argument."
+        }
+        $candidate = $rawCandidate.Trim().Trim('"')
         if ([string]::IsNullOrWhiteSpace($candidate)) {
             Write-Host 'A path is required.' -ForegroundColor Yellow
             continue
@@ -89,10 +145,13 @@ function Get-GimiDirectory {
 
 function Set-IniValue {
     param([string]$Path, [string]$Section, [string]$Key, [string]$Value)
-    $lines = if (Test-Path -LiteralPath $Path -PathType Leaf) {
-        [Collections.Generic.List[string]]::new([string[]](Get-Content -LiteralPath $Path -Encoding UTF8))
-    } else {
-        [Collections.Generic.List[string]]::new()
+    # Construct the generic list explicitly. PowerShell 7 can otherwise bind
+    # the array overload and return a fixed-size Object[] on some hosts.
+    $lines = [Collections.Generic.List[string]]::new()
+    if (Test-Path -LiteralPath $Path -PathType Leaf) {
+        foreach ($line in (Get-Content -LiteralPath $Path -Encoding UTF8)) {
+            [void]$lines.Add([string]$line)
+        }
     }
     $sectionHeader = "[$Section]"
     $sectionIndex = -1
@@ -137,11 +196,13 @@ function Backup-FileIfExternal {
 }
 
 function Configure-ReShade {
-    param([hashtable]$State)
+    param([hashtable]$State, [string]$Profile)
     $managedDirectory = Join-Path $stateDirectory 'reshade-runtime'
     $managedIni = Join-Path $managedDirectory 'ReShade.ini'
     $managedPreset = Join-Path $managedDirectory 'ReShadePreset.ini'
     $emptyAddonDirectory = Join-Path $reShadeDirectory 'empty-addons'
+    $dlss5Profile = Test-Dlss5Profile -Profile $Profile
+    $addonDirectory = if ($dlss5Profile) { $dlss5BridgeAddonDirectory } else { $emptyAddonDirectory }
     $shaderDirectory = Join-Path $reShadeDirectory 'reshade-shaders\Shaders'
     $textureDirectory = Join-Path $reShadeDirectory 'reshade-shaders\Textures'
     $cacheDirectory = Join-Path $reShadeDirectory 'cache'
@@ -150,7 +211,7 @@ function Configure-ReShade {
     $templateText = Get-Content -LiteralPath $reShadeIniTemplate -Raw -Encoding UTF8
     Write-Utf8File -Path $managedIni -Content ("; Managed by GIMI DLSS Self-Contained Experiment`r`n" + $templateText)
     Copy-Item -LiteralPath $reShadePreset -Destination $managedPreset -Force
-    Set-IniValue -Path $managedIni -Section 'ADDON' -Key 'AddonPath' -Value $emptyAddonDirectory
+    Set-IniValue -Path $managedIni -Section 'ADDON' -Key 'AddonPath' -Value $addonDirectory
     Set-IniValue -Path $managedIni -Section 'ADDON' -Key 'DisabledAddons' -Value ''
     Set-IniValue -Path $managedIni -Section 'GENERAL' -Key 'EffectSearchPaths' -Value $shaderDirectory
     Set-IniValue -Path $managedIni -Section 'GENERAL' -Key 'TextureSearchPaths' -Value $textureDirectory
@@ -159,14 +220,79 @@ function Configure-ReShade {
     Set-IniValue -Path $managedIni -Section 'GENERAL' -Key 'NoReloadOnInit' -Value '0'
     Set-IniValue -Path $managedIni -Section 'INPUT' -Key 'KeyOverlay' -Value '36,0,0,0'
     Set-IniValue -Path $managedIni -Section 'SCREENSHOT' -Key 'SavePath' -Value $screenshotDirectory
+    if ($dlss5Profile) {
+        # ReShade loads only the bridge from DllMain. The bridge loads RenoDX
+        # after it has opened OptiScaler's private D3D12 NGX session; loading
+        # RenoDX here is too early and leaves it with zero NGX detours.
+        # Graphics hooks remain disabled by the launcher environment, so this is
+        # an Add-on API host rather than a competing D3D11/DXGI wrapper.
+        $bridgeStage = 3
+        $bridgeMode = 2
+        $skipGame = 1
+        $renodxEnabled = $true
+        # Match the known-good v1.1 control profile. The add-on may first probe
+        # low-resolution NR and then fall back to its native-resolution pass;
+        # standard spatial upscaling remains owned by the game/OptiScaler path.
+        $nrUpscalingEnabled = $true
+        $qualityOverride = -1
+        $dredEnabled = $false
+        $loadFromDllMain = 'dlss5-dx11-bridge.addon64'
+        Set-IniValue -Path $managedIni -Section 'ADDON' -Key 'LoadFromDllMain' -Value $loadFromDllMain
+        # It must not be disabled: RenoDX registers with ReShade when the bridge
+        # loads it later from the deferred-reno subdirectory.
+        Set-IniValue -Path $managedIni -Section 'ADDON' -Key 'DisabledAddons' -Value ''
+        if ($renodxEnabled) {
+            Set-IniValue -Path $managedIni -Section 'RenoDX.DLSS5' -Key 'EnableHooks' -Value '2'
+            Set-IniValue -Path $managedIni -Section 'RenoDX.DLSS5' -Key 'NeuralUplift' -Value '1'
+            Set-IniValue -Path $managedIni -Section 'RenoDX.DLSS5' -Key 'NREnableUpscaling' -Value $(if ($nrUpscalingEnabled) { '1' } else { '0' })
+            Set-IniValue -Path $managedIni -Section 'RenoDX.DLSS5' -Key 'NRAutoMask' -Value '1'
+            Set-IniValue -Path $managedIni -Section 'RenoDX.DLSS5' -Key 'NRColorStrength' -Value '1'
+            Set-IniValue -Path $managedIni -Section 'RenoDX.DLSS5' -Key 'NRIntensity' -Value '2'
+            Set-IniValue -Path $managedIni -Section 'RenoDX.DLSS5' -Key 'NRLocalStructure' -Value '0.97'
+            Set-IniValue -Path $managedIni -Section 'RenoDX.DLSS5' -Key 'NRLocalTone' -Value '1.14'
+            Set-IniValue -Path $managedIni -Section 'RenoDX.DLSS5' -Key 'NRSkinStructure' -Value '1.88'
+            Set-IniValue -Path $managedIni -Section 'RenoDX.DLSS5' -Key 'NRStyle' -Value '0'
+            Set-IniValue -Path $managedIni -Section 'RenoDX.DLSS5' -Key 'NRTransferStrength' -Value '0.6'
+            Set-IniValue -Path $managedIni -Section 'RenoDX.DLSS5' -Key 'NRUICorrection' -Value '1'
+        }
+        if ($null -ne $bridgeStage) {
+            $bridgeConfig = @(
+                '# Managed DLSS5 isolation profile'
+                "stage=$bridgeStage"
+                "mode=$bridgeMode"
+                'flags=-1'
+                "quality=$qualityOverride"
+                'subrects=1'
+                'reset_every=0'
+                'pixels=0'
+                "skip_game=$skipGame"
+                "dred=$(if ($dredEnabled) { 1 } else { 0 })"
+                'skip_exe=1'
+                "defer_reno=$(if ($renodxEnabled) { 1 } else { 0 })"
+            ) -join "`r`n"
+            Write-Utf8File -Path (Join-Path $dlss5BridgeAddonDirectory 'dlss5-dx11-bridge.cfg') -Content ($bridgeConfig + "`r`n")
+            $State['DLSS5BridgeStage'] = $bridgeStage
+            $State['DLSS5BridgeMode'] = $bridgeMode
+            $State['DLSS5SkipGame'] = $skipGame
+            $State['RenoDxEnabled'] = $renodxEnabled
+        }
+        # The bridge and its deferred add-on share this config snapshot, so the
+        # evidence directory contains exactly the RenoDX settings used at run time.
+        Copy-Item -LiteralPath $managedIni -Destination (Join-Path $dlss5BridgeAddonDirectory 'ReShade.ini') -Force
+        $State['DLSS5AddonDirectory'] = $dlss5BridgeAddonDirectory
+        $State['DLSS5BridgeAddon'] = $dlss5BridgeAddon
+        $State['DLSS5RenoDxAddon'] = $dlss5RenoDxAddon
+        $State['DLSS5Runtime'] = $dlss5Runtime
+    }
     $State['ManagedReShadeIni'] = $managedIni
     $State['ManagedReShadePreset'] = $managedPreset
+    $State['ManagedReShadeBasePath'] = $managedDirectory
 }
 
 function Configure-HostedReShadeSidecar {
     param([string]$GimiDirectory, [string]$Profile, [hashtable]$State)
     $sidecarPath = Join-Path $GimiDirectory 'GIMIHostedReShade.ini'
-    $enabled = if ($Profile -eq 'GimiBridgeHostedReShade') { '1' } else { '0' }
+    $enabled = '1'
     $content = @(
         '[HostedReShade]'
         "Enabled=$enabled"
@@ -194,10 +320,19 @@ function Configure-OptiScaler {
     Set-IniValue -Path $optiIni -Section 'Libraries' -Key 'NvngxFeaturePath' -Value $optiDirectory
     Set-IniValue -Path $optiIni -Section 'DLSS' -Key 'Enabled' -Value 'true'
     Set-IniValue -Path $optiIni -Section 'DLSS' -Key 'UseGenericAppIdWithDlss' -Value 'true'
+    Set-IniValue -Path $optiIni -Section 'Hooks' -Key 'SkipD3D11DeviceVTableHooks' -Value 'true'
     Set-IniValue -Path $optiIni -Section 'Menu' -Key 'OverlayMenu' -Value 'true'
     Set-IniValue -Path $optiIni -Section 'Menu' -Key 'ShortcutKey' -Value '0x2D'
     Set-IniValue -Path $optiIni -Section 'Log' -Key 'LogToFile' -Value 'true'
     Set-IniValue -Path $optiIni -Section 'Log' -Key 'LogLevel' -Value '1'
+}
+
+function Configure-BridgeRenderScale {
+    param([string]$Profile, [hashtable]$State)
+
+    # The release never changes Dx11FsrBridge's render-scale cache. It remains
+    # controlled through the bridge UI and is not part of DLSS5 NR setup.
+    $State['BridgeRenderScale'] = 'preserved'
 }
 
 function Configure-Gimi {
@@ -276,23 +411,6 @@ function Write-UnlockerConfig {
     param([string]$ResolvedGamePath, [string]$GimiDll, [string]$Profile)
     $preloadDlls = @($GimiDll)
     $dllList = @($reShadeDll, $bridgeDll, $optiDll)
-    switch ($Profile) {
-        'NoGimi' {
-            $preloadDlls = @()
-        }
-        'GimiReShade' {
-            $dllList = @($reShadeDll)
-        }
-        'GimiBridge' {
-            $dllList = @($bridgeDll, $optiDll)
-        }
-        'GimiBridgeHostedReShade' {
-            # ReShade is intentionally absent from this list. GIMI loads its
-            # public runtime only after the bridge and OptiScaler return to
-            # GIMI's final Present call.
-            $dllList = @($bridgeDll, $optiDll)
-        }
-    }
     $config = [ordered]@{
         GamePath = $ResolvedGamePath
         AutoStart = $true
@@ -329,7 +447,11 @@ Assert-File $optiTemplate 'OptiScaler template'
 Assert-File $reShadeDll 'ReShade64.dll'
 Assert-File $reShadeIniTemplate 'ReShade template'
 Assert-File $reShadePreset 'ReShade preset'
+Assert-File $dlss5BridgeAddon 'DLSS5 DX11 bridge add-on'
+Assert-File $dlss5RenoDxAddon 'RenoDX DLSS5 add-on'
+Assert-Dlss5Runtime
 New-Item -ItemType Directory -Force -Path $stateDirectory | Out-Null
+Test-PackageIntegrity
 
 $saved = $null
 if (-not $ForceConfigure -and (Test-Path -LiteralPath $statePath -PathType Leaf)) {
@@ -364,19 +486,20 @@ $state = @{
     ConfiguredAt = (Get-Date).ToString('s')
     InjectionOrder = @('GIMI d3d11 preload', 'ReShade64.dll', 'Dx11FsrBridge.dll', 'OptiScaler.dll')
 }
-if ($TestProfile -eq 'GimiBridgeHostedReShade') {
-    $state['InjectionOrder'] = @(
-        'GIMI d3d11 preload',
-        'Dx11FsrBridge.dll',
-        'OptiScaler.dll',
-        'GIMI-hosted ReShade runtime on final Present'
-    )
-}
+$state['InjectionOrder'] = @(
+    'GIMI d3d11 preload',
+    'ReShade64.dll passive Add-on host (graphics hooks disabled)',
+    'DLSS5 DX11 bridge registered from ReShade DllMain; RenoDX loaded after private D3D12 NGX session',
+    'Dx11FsrBridge.dll',
+    'Patched OptiScaler.dll with DLSS 310.8',
+    'GIMI-hosted ReShade runtime on final Present'
+)
 Install-GimiRuntime -DestinationDirectory $GimiPath -State $state
 Configure-Gimi -GimiDirectory $GimiPath -State $state
 Configure-GimiHealthBarCompatibility -GimiDirectory $GimiPath -State $state
 Configure-OptiScaler
-Configure-ReShade -State $state
+Configure-BridgeRenderScale -Profile $TestProfile -State $state
+Configure-ReShade -State $state -Profile $TestProfile
 Configure-HostedReShadeSidecar -GimiDirectory $GimiPath -Profile $TestProfile -State $state
 Write-UnlockerConfig -ResolvedGamePath $GamePath -GimiDll $state['InstalledGimiD3d11'] -Profile $TestProfile
 Write-Utf8File -Path $statePath -Content ($state | ConvertTo-Json -Depth 4)
@@ -393,19 +516,11 @@ if ([int]$state['GimiModIniCount'] -gt 0) {
 if ($state.ContainsKey('HealthBarStoreDisabled')) {
     Write-Host '  HealthBar compatibility: unsupported store directive disabled (original backed up in state)' -ForegroundColor Yellow
 }
-Write-Host "  Test profile: $TestProfile"
-switch ($TestProfile) {
-    'Full' { Write-Host '  DLL order: GIMI preload -> ReShade -> Dx11FsrBridge -> OptiScaler' }
-    'NoGimi' { Write-Host '  DLL order: ReShade -> Dx11FsrBridge -> OptiScaler' }
-    'GimiReShade' { Write-Host '  DLL order: GIMI preload -> ReShade' }
-    'GimiBridge' { Write-Host '  DLL order: GIMI preload -> Dx11FsrBridge -> OptiScaler' }
-    'GimiBridgeHostedReShade' { Write-Host '  DLL order: GIMI preload -> Dx11FsrBridge -> OptiScaler; ReShade runs inside GIMI final Present' }
-}
-if ($TestProfile -eq 'GimiBridgeHostedReShade') {
-    Write-Host '  ReShade: hosted by GIMI after the final upscaled frame; press Home in-game to open its overlay.'
-} else {
-    Write-Host '  ReShade starts with an empty preset and no Add-ons enabled for stability.'
-}
+Write-Host '  Mode: validated r12 chain (v1.1 control profile + continuous Native NR)'
+Write-Host '  DLL order: GIMI preload -> passive ReShade Add-on host -> Dx11FsrBridge -> patched OptiScaler -> RenoDX Native NR -> GIMI final Present + hosted ReShade'
+Write-Host '  ReShade: hosted by GIMI after the final upscaled frame; press Home in-game to open its overlay.'
+Write-Host '  DLSS5: passive Add-on host is enabled; RenoDX hooks only NGX (no ReShade graphics hooks).'
+Write-Host '  Control profile: v1.1 requests NR upscaling; this runtime safely falls back to continuous native-resolution NR while DLSS remains the spatial upscaler.' -ForegroundColor Yellow
 
 if ($ConfigureOnly) { exit 0 }
 
@@ -417,21 +532,15 @@ if ($null -ne $existingUnlocker) {
 
 Write-Status 'Launching Genshin Impact through the bundled UnlockFPS runtime...' Green
 $launchStartedAt = Get-Date
-if ($TestProfile -eq 'GimiBridgeHostedReShade') {
-    # These variables are inherited by UnlockFPS and then Genshin. They tell
-    # the bundled GIMI runtime to create a ReShade C-API runtime, while the
-    # graphics hooks remain disabled so ReShade cannot wrap the swap chain.
-    $env:GIMI_HOSTED_RESHADE_DLL = $reShadeDll
-    $env:GIMI_HOSTED_RESHADE_CONFIG = $state['ManagedReShadeIni']
-    $env:RESHADE_DISABLE_GRAPHICS_HOOK = '1'
-    # The hosted runtime needs ReShade's normal window input path for Home.
-    Remove-Item Env:RESHADE_DISABLE_INPUT_HOOK -ErrorAction SilentlyContinue
-} else {
-    Remove-Item Env:GIMI_HOSTED_RESHADE_DLL -ErrorAction SilentlyContinue
-    Remove-Item Env:GIMI_HOSTED_RESHADE_CONFIG -ErrorAction SilentlyContinue
-    Remove-Item Env:RESHADE_DISABLE_GRAPHICS_HOOK -ErrorAction SilentlyContinue
-    Remove-Item Env:RESHADE_DISABLE_INPUT_HOOK -ErrorAction SilentlyContinue
-}
+# These variables are inherited by UnlockFPS and then Genshin. They tell the
+# bundled GIMI runtime to create a ReShade C-API runtime, while graphics hooks
+# stay disabled so ReShade cannot wrap the game's swap chain.
+$env:GIMI_HOSTED_RESHADE_DLL = $reShadeDll
+$env:GIMI_HOSTED_RESHADE_CONFIG = $state['ManagedReShadeIni']
+$env:RESHADE_DISABLE_GRAPHICS_HOOK = '1'
+$env:RESHADE_BASE_PATH_OVERRIDE = $state['ManagedReShadeBasePath']
+# The hosted runtime needs ReShade's normal window input path for Home.
+Remove-Item Env:RESHADE_DISABLE_INPUT_HOOK -ErrorAction SilentlyContinue
 $launcher = Start-Process -FilePath $unlockerPath -WorkingDirectory $root -PassThru
 $gameObserved = $false
 for ($attempt = 0; $attempt -lt 8; $attempt++) {

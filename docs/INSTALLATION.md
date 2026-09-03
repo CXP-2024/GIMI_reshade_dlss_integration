@@ -9,6 +9,15 @@
 
 请先关闭游戏、其他 UnlockFPS 和 `3DMigoto Loader.exe`。整合启动器本身会预加载 GIMI，不需要 Loader 的全局 Hook。
 
+## GitHub 版先安装 DLSS 5 Runtime
+
+Downloads 中的完整离线包已经包含 Runtime，可以跳过本节。GitHub 因文件大小限制不包含 `nvngx_dlssnr.dll`：
+
+- 国外：[Google Drive](https://drive.google.com/file/d/1L7Pi4adSQal_OxpEzTMuT0NfeQTKIK-_/view?usp=sharing)
+- 国内：[百度网盘](https://pan.baidu.com/s/1SAm1-QL0YvH8Kc28OGigAA?pwd=qisz)，提取码 `qisz`
+
+下载后双击 `Install-DLSS5-Runtime.bat`，把文件拖入窗口并回车。脚本只接受文件名为 `nvngx_dlssnr.dll` 且 SHA-256 为 `4C5BD1171C7336B4B04FB394DE51DA285AB6EAD6F922D7AFDEC163F71C319D74` 的版本。不要从不明来源换用同名 DLL。
+
 ## 首次启动
 
 1. 完整解压项目；不要在压缩包预览窗口中直接运行。
@@ -24,7 +33,7 @@
 - 生成 Bridge、OptiScaler 和 ReShade 的运行配置；
 - 在 GIMI 目录写入 UTF-16 `GIMIHostedReShade.ini`；
 - 如果检测到特定旧版 `HealthBar.ini` 中当前 GIMI 不支持的 `store = $health, ps-cb0, 33`，先备份，再只注释这一行；
-- 生成 `fps_config.json`，其中 `PreloadDlls` 只有 GIMI，`DllList` 依次为 Bridge、OptiScaler；
+- 生成 `fps_config.json`，其中 `PreloadDlls` 只有 GIMI，`DllList` 依次为被动 ReShade Add-on Host、Bridge、OptiScaler；
 - 通过 UnlockFPS 创建挂起的游戏进程，完成 DLL 装载后再恢复主线程。
 
 路径和备份保存在项目的 `state` 目录。第二次启动会复用有效路径；路径发生变化时运行 `Configure-Again.bat`。
@@ -34,15 +43,17 @@
 - `F10`：GIMI 重新加载。Mod 应保持可见，且不应出现致命退出或连续错误音。
 - `Insert`：OptiScaler 菜单。选中的后端应为 DLSS，而不是 Fallback。
 - `Home`：ReShade 菜单。启用/关闭效果应改变最终画面。
+- `F6`：RenoDX Neural Rendering。切换前后应能观察到光影差异。
 
 日志位置：
 
 - `components/Bridge/Dx11FsrBridge.log`
 - `components/OptiScaler/OptiScaler.log`
 - 所选 GIMI 目录中的 `d3d11_log.txt`
-- 游戏目录中的 `ReShade.log`（部分构建会延迟到退出时刷新）
+- `state/reshade-runtime/ReShade.log`
+- `components/DLSS5/Addons/bridge-addons/dlss5-dx11-bridge.log`
 
-真正的 DLSS 运行证据是 OptiScaler 日志内持续出现 `NVSDK_NGX_D3D11_EvaluateFeature`，并同时显示内部渲染分辨率和目标分辨率。只看到 DLL 被加载或 ReShade 横幅不能证明 DLSS 已经工作。
+真正的标准 DLSS 证据是 OptiScaler 日志持续出现 `NVSDK_NGX_D3D11_EvaluateFeature`，并同时显示内部渲染分辨率和目标分辨率。真正的 DLSS5 证据是 ReShade 日志中的 native `inline feature 18 evaluation succeeded` 计数持续增长。第一次低分辨率请求返回 `0xBAD00005` 并转入 native 是已验证路径，不等于 DLSS5 整体失败。
 
 ## HDR 与 ReShade 效果
 
@@ -69,7 +80,11 @@ HDR 截图在普通 SDR 查看器中也可能显得发白，优先以 HDR 显示
 
 ### ReShade 没有出现
 
-确认 GIMI 目录中的 `GIMIHostedReShade.ini` 为 `Enabled=1`，其中 DLL 和配置路径指向当前整合目录。`fps_config.json` 的 `DllList` 不应包含 `ReShade64.dll`；Hosted 模式下这正是预期行为。
+确认 GIMI 目录中的 `GIMIHostedReShade.ini` 为 `Enabled=1`，其中 DLL 和配置路径指向当前整合目录。`fps_config.json` 的 `DllList` 中会先加载同一 `ReShade64.dll` 作为禁用图形 Hook 的 Add-on Host；最终可见 Runtime 仍由 GIMI 托管，这是两个不同职责。
+
+### 启动器提示缺少 nvngx_dlssnr.dll
+
+GitHub 版需要按本文“GitHub 版先安装 DLSS 5 Runtime”完成一次安装。完整离线包若出现此提示，说明解压不完整或文件被安全软件隔离；重新解压并运行 `Verify-Installation.bat`。
 
 ### GIMI Mod 不工作
 

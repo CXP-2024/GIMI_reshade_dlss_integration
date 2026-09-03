@@ -21,5 +21,9 @@ outputs/
 /components/ReShade/cache/
 /components/ReShade/empty-addons/
 
+# NVIDIA DLSS Neural Rendering runtime is distributed through the documented
+# Google Drive / Baidu links and must never be committed to GitHub.
+/components/DLSS5/**/nvngx_dlssnr.dll
+
 # Temporary archives
 *.zip

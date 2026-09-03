@@ -1,0 +1,28 @@
+diff --git a/OptiScaler/wrapped/wrapped_swapchain.cpp b/OptiScaler/wrapped/wrapped_swapchain.cpp
+index e7c06e0..cb6639d 100644
+--- a/OptiScaler/wrapped/wrapped_swapchain.cpp
++++ b/OptiScaler/wrapped/wrapped_swapchain.cpp
+@@ -254,7 +254,12 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT
+                 if (upscalerTimeOpt = currentFeature->ReadUpscalerTime(cq); upscalerTimeOpt.has_value())
+                     currentFeature->ReadDetailedGpuTimes(cq, State::Instance().detailedGpuTimes);
+             }
+-            else if (device != nullptr)
++            // A private D3D12 NGX session may temporarily become the process-wide
++            // current feature while this swap chain is still D3D11. Never pass a
++            // D3D11 immediate context to IFeature_Dx12::ReadUpscalerTime: that
++            // method expects an ID3D12CommandQueue and the vtable call aliases a
++            // D3D11 state-binding method.
++            else if (device != nullptr && currentFeature->Api() == API::DX11)
+             {
+                 ID3D11DeviceContext* context = nullptr;
+                 device->GetImmediateContext(&context);
+@@ -264,7 +269,8 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT
+ 
+                 context->Release();
+             }
+-            if (State::Instance().swapchainInteropApi == SwapchainInteropApi::Dx11wDx12 &&
++            if (currentFeature->Api() == API::DX11 &&
++                State::Instance().swapchainInteropApi == SwapchainInteropApi::Dx11wDx12 &&
+                 State::Instance().currentD3D11Device != nullptr)
+             {
+                 ID3D11DeviceContext* context = nullptr;

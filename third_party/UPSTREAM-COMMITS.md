@@ -14,8 +14,8 @@
 - Base commit: `c983a500335134ecff512bfcdadcf912d1286547`
 - Runtime version: `10.0.0-dev (c983a50)`
 - License: GPL-3.0，见 `LICENSES/OptiScaler-GPL-3.0.txt`
-- Local changes: GIMI Device/Context 原生接口解析、NGX 初始化/Create/Evaluate 兼容；发行配置不使用 OptiScaler Hosted ReShade
-- Patch: `src/patches/OptiScaler-GIMI-DX11-interop.patch`
+- Local changes: GIMI Device/Context 原生接口解析、NGX 初始化/Create/Evaluate 兼容；DX11 Present API 类型守卫；发行配置不使用 OptiScaler Hosted ReShade
+- Patches: `src/patches/OptiScaler-GIMI-DX11-interop.patch`、`src/patches/OptiScaler-DX11-Present-API-guard.patch`
 
 ## Dx11FsrBridge
 
@@ -39,7 +39,14 @@
 - Inspected source commit: `ec0346e035b7d1c267103ea0d7c231b3945fc2b1`
 - Packaged runtime version: `6.8.0`
 - License: BSD 3-Clause，见 `LICENSES/ReShade-BSD-3-Clause.md`
-- Integration: 动态解析公开 C Runtime API；不静态链接，不启用图形 Hook
+- Integration: 动态解析公开 C Runtime API；不静态链接，不启用图形 Hook；Hosted 更新路径补发逐帧 Add-on 事件
+- Patch: `src/patches/ReShade-hosted-addon-present-events.patch`
+
+## DLSS5 DX11 Bridge / RenoDX Add-on
+
+- Reference package: https://github.com/CXP-2024/dlss5_for_genshinimpact/
+- Role: 私有 D3D12 NGX 会话、DX11/DX12 资源运输、延迟加载 RenoDX DLSS5 Add-on
+- `nvngx_dlssnr.dll` 不提交到本仓库；README 提供国内外下载位置与固定 SHA-256
 
 ## Lilium ReShade HDR Shaders
 
