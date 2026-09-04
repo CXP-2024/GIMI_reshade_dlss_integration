@@ -1,94 +1,78 @@
 # 实机验证记录
 
-验证日期：2026-09-04。此页区分“DLL 成功加载”和“功能实际逐帧运行”；后者才算通过。
+验证日期：2026-09-04。本页只把“逐帧实际执行”视为成功，单纯加载 DLL、创建菜单或显示 `ACTIVE` 不算通过。
 
-## 验证环境
+## 环境
 
 - Windows 11 x64
-- NVIDIA GeForce RTX 5080
-- DirectX 11 HDR10 SwapChain，3840×2160 输出
-- GIMI `[System] hook=recommended`、`skip_swapchain_wrap=0`
-- Bridge `Fsr2TranslationMode=2`、渲染精度 0.8
-- OptiScaler `Dx11Upscaler=dlss`、`LoadReShade=false`
-- ReShade 6.8.0，由 GIMI Hosted Runtime 执行
-- DLSS5 Bridge 私有 D3D12 NGX 会话；RenoDX DLSSNR v310.8.0
+- NVIDIA GeForce RTX 5080，驱动 616.56
+- 原神 DX11，HDR10，3840×2160 输出
+- 渲染比例 0.8，即 3072×1728 内部渲染
+- GIMI 为唯一 D3D11 包装器与最终 Present 所有者
+- ReShade 6.8 Hosted Runtime，图形 Hook 关闭
+- OptiScaler v0.2 DLSS-on-DX12 路径
+- 前置 NR Add-on Mode 2，内置 OptiScaler post-NR 关闭
 
-## 已通过项目
+## 最终成功合同
 
-### 进程与呈现稳定性
-
-- 通过 `Launch-Genshin-GIMI-DLSS-ReShade.bat` 创建游戏进程；
-- 游戏通过登录/资源加载阶段并持续响应；
-- 4K HDR10 SwapChain 创建、Resize 和 Present 均成功；
-- ReShade 顶部启动横幅出现在真实游戏画面中，证明 Runtime 已进入最终呈现链，而不是只有 DLL 映射。
-
-### Bridge 真实分发
-
-Bridge 日志依次出现：
+同一帧的有效顺序为：
 
 ```text
-fsr2_get_proc_address_shim_ready exports=6
-fsr2_translation_context_created render=3072x1728 output=3840x2160
-fsr2_translation_dispatch_succeeded count=1 render=3072x1728 output=3840x2160
-fsr2_translation_dispatch_succeeded count=16384 render=3072x1728 output=3840x2160
+Feature 18: 3072x1728 -> 3072x1728
+Feature 1 : 3072x1728 -> 3840x2160
 ```
 
-测试中把渲染精度从 0.8 改到 0.2，再改回 0.8，Bridge 能销毁/重建上下文，并分别识别 768×432 和 3072×1728 输入。
-
-### NVIDIA DLSS 真实执行
-
-OptiScaler 日志不是只报告“DLSS Enabled”，而是逐帧出现：
+`nr-before-sr.log` 持续记录：
 
 ```text
-ffxFsr2ContextDispatch_Dx11 handle: F4242, internalResolution: 3072x1728
-NVSDK_NGX_D3D11_EvaluateFeature Handle: 1000002
-DLSSFeature::ProcessEvaluateParams Render Size: 3072x1728,
-Target Size: 3840x2160, Display Size: 3840x2160
+Color ... physical=3072x1728 format=10(R16G16B16A16_FLOAT)
+signed DLSSNR D3D12 runtime initialized through nrchain_nvngx.dll
+signed feature 18 create 3072x1728 -> 3072x1728 ... Success
+NR-before-SR evaluate succeeded: count=1 extent=3072x1728
+...
+NR-before-SR evaluate succeeded: count=9600 extent=3072x1728
+SuperSampling ... create=3072x1728 -> 3840x2160
 ```
 
-这排除了 FSR Fallback 和只加载 `nvngx_dlss.dll` 的假阳性。
+这证明 Feature 18 不是在最终 4K 图像上做后处理，也没有取代原来的空间超分；它先改善低分辨率颜色，原 Feature 1 随后完成放大。
 
-### DLSS5 Native NR 真实执行
+## 组件共存
 
-v1.1 配置的低分辨率探测先返回 `0xBAD00005`，随后保留标准 DLSS 输出并切换到输出分辨率：
+- `Dx11FsrBridge.log` 连续增长到至少 8192 次分发；
+- Feature 18 成功计数达到 9600，且 Feature 1 仍持续执行；
+- GIMI Mod 和 `F10` 重载保留；
+- `Home` 可打开最终 ReShade，`Insert` 可打开 OptiScaler；
+- `F6` 切换前置 NR 时用户确认光影效果有实际差异；
+- 游戏保持响应，未重新引入旧的 D3D11/DX12 Context 指针冲突。
+
+## HDR 截图验证
+
+旧 Hosted Runtime 未收到 `SetColorSpace1` 信息，会把 R10/PQ 背景误存为无标记 8 位 sRGB PNG，画面呈灰白。修复后 GIMI 在创建 Hosted Runtime 前传递 HDR10/PQ 元数据。
+
+自动 Before/After 测试结果：
 
 ```text
-created inline NR resources 1920x1080 -> 3840x2160 (upscaling)
-feature 18 evaluate failed with 0xbad00005; the game DLSS output was retained
-NR upscaling fell back to native
-created inline NR resources 3840x2160 -> 3840x2160 (native)
-inline feature 18 evaluation succeeded (count=1, ... [native])
-inline feature 18 evaluation succeeded (count=60, ... [native])
+旧：3840x2160, RGB 8-bit, cICP absent
+新：3840x2160, RGB 16-bit, cICP 9,16,0,1 (BT.2020, PQ, RGB, full range)
 ```
 
-用户同时确认 `F6` 切换对光影有实际影响。`count=60` 证明 r12 已跨过旧版本只处理三个持久输出资源的状态。
+截图修复轮次中，前置 NR 同时持续成功到 9600 帧，因此该修复没有破坏 DLSS5、原 DLSS 或 GIMI 所有权。
 
-### 四组件共存
+## 发布验收
 
-- Bridge 和 OptiScaler 持续分发时，GIMI 没有触发旧的 unwrapped-device 致命退出；
-- GIMI 保持最终 Present 所有权，并在其后半段执行 ReShade Runtime；
-- `DllList` 中的 ReShade 只作为被动 Add-on Host，`RESHADE_DISABLE_GRAPHICS_HOOK=1`；最终可见 Runtime 仍由 GIMI 托管；
-- `Home` 使用 ReShade 输入路径，`Insert` 使用 OptiScaler 菜单路径；
-- 用户在共享实机画面中确认组合已经正常工作。
+每次更新后至少完成：
 
-## 发布验收步骤
+1. 从全新解压目录运行 `Verify-Installation.ps1`，所有 manifest 项必须通过；
+2. 进入大世界并活动数分钟；
+3. 确认 Bridge 分发、Feature 18 和 Feature 1 三类计数都持续增长；
+4. 确认 Feature 18 输入输出尺寸相同，Feature 1 输出尺寸更大；
+5. 测试 GIMI Mod、`F10`、`Home`、`Insert` 与 `F6`；
+6. 截取 Before/After，确认 PNG 为 16 位且带 cICP `9,16,0,1`；
+7. 退出游戏后运行 `Verify-Installation.ps1 -LastRun`。
 
-每次游戏、Bridge、OptiScaler、ReShade 或 GIMI 更新后，应重新完成：
+## 验证边界
 
-1. 进入登录界面，确认无黑屏和致命退出；
-2. 进入大世界并活动至少数分钟；
-3. `Insert` 确认 DLSS 后端不是 Fallback；
-4. 日志确认 `NVSDK_NGX_D3D11_EvaluateFeature` 持续递增；
-5. 确认 GIMI Mod 可见，并执行一次 `F10`；
-6. `Home` 打开 ReShade，启停一种效果确认最终画面发生变化；
-7. `F6` 切换 NR，确认画面变化，且 `Successful NR frames` 持续增长；
-8. 修改分辨率或窗口模式，确认 Resize 后四者仍恢复；
-9. 正常退出，运行 `Verify-Installation.bat` 的最后运行诊断。
-
-## 当前验证边界
-
-- 此次验证只覆盖上述 NVIDIA/Windows/DX11 环境，没有声称 AMD、Intel、Linux/Wine 或帧生成可用；
-- Frame Generation 在默认配置中关闭；
-- Bridge 的多个 RVA 与游戏版本相关，原神更新后必须重新验证；
-- `FakeHDR` 的主观亮度不作为兼容性判断标准；HDR 截图在 SDR 查看器中也可能失真；
-- 上述日志摘录来自本地实机运行，不是 CI 模拟。
+- 当前只验证 RTX 5080/615+ 驱动，不宣称 RTX 40、AMD、Intel、Wine 或帧生成可用；
+- 原神更新可能改变 Bridge RVA、资源格式或输入合同；
+- HDR PNG 在不支持 PQ/BT.2020 的查看器中仍可能显示错误；
+- 性能和画质偏好与链路是否正确执行是两个独立问题。

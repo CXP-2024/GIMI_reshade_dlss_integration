@@ -4,8 +4,8 @@ param(
     [string]$GimiPath,
     [switch]$ConfigureOnly,
     [switch]$ForceConfigure,
-    [ValidateSet('StableNativeNR')]
-    [string]$TestProfile = 'StableNativeNR'
+    [ValidateSet('PreNRThenDLSS')]
+    [string]$TestProfile = 'PreNRThenDLSS'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -26,12 +26,11 @@ $reShadeDll = Join-Path $reShadeDirectory 'ReShade64.dll'
 $reShadeIniTemplate = Join-Path $reShadeDirectory 'ReShade.ini'
 $reShadePreset = Join-Path $reShadeDirectory 'ReShadePreset.ini'
 $dlss5AddonDirectory = Join-Path $root 'components\DLSS5\Addons'
-$dlss5BridgeAddonDirectory = Join-Path $dlss5AddonDirectory 'bridge-addons'
-$dlss5DeferredRenoDirectory = Join-Path $dlss5BridgeAddonDirectory 'deferred-reno'
-$dlss5BridgeAddon = Join-Path $dlss5BridgeAddonDirectory 'dlss5-dx11-bridge.addon64'
-$dlss5RenoDxAddon = Join-Path $dlss5DeferredRenoDirectory 'renodx-dlss5.addon64'
-$dlss5Runtime = Join-Path $dlss5DeferredRenoDirectory 'nvngx_dlssnr.dll'
-$dlss5RuntimeSha256 = '4C5BD1171C7336B4B04FB394DE51DA285AB6EAD6F922D7AFDEC163F71C319D74'
+$dlss5BridgeAddonDirectory = Join-Path $dlss5AddonDirectory 'pre-nr'
+$dlss5BridgeAddon = Join-Path $dlss5BridgeAddonDirectory 'nr-before-sr.zh-CN.addon64'
+$dlss5NrChainBridge = Join-Path $dlss5BridgeAddonDirectory 'nrchain_nvngx.dll'
+$dlss5Runtime = Join-Path $dlss5BridgeAddonDirectory 'nvngx_dlssnr.dll'
+$dlss5RuntimeSha256 = 'E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E'
 $dlss5RuntimeGoogleDrive = 'https://drive.google.com/file/d/1L7Pi4adSQal_OxpEzTMuT0NfeQTKIK-_/view?usp=sharing'
 $dlss5RuntimeBaidu = 'https://pan.baidu.com/s/1SAm1-QL0YvH8Kc28OGigAA?pwd=qisz'
 $manifestPath = Join-Path $root 'package-manifest.sha256'
@@ -39,7 +38,7 @@ $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
 function Test-Dlss5Profile {
     param([string]$Profile)
-    return $Profile -eq 'StableNativeNR'
+    return $Profile -eq 'PreNRThenDLSS'
 }
 
 function Write-Status {
@@ -59,16 +58,6 @@ function Assert-File {
     }
 }
 
-function Assert-Dlss5Runtime {
-    if (-not (Test-Path -LiteralPath $dlss5Runtime -PathType Leaf)) {
-        throw "DLSS5 runtime is missing. Download nvngx_dlssnr.dll, then run Install-DLSS5-Runtime.bat or place it at '$dlss5Runtime'. International: $dlss5RuntimeGoogleDrive ; China: $dlss5RuntimeBaidu (code: qisz)"
-    }
-    $actualHash = Get-Sha256 -Path $dlss5Runtime
-    if (-not $actualHash.Equals($dlss5RuntimeSha256, [StringComparison]::OrdinalIgnoreCase)) {
-        throw "DLSS5 runtime hash mismatch. Expected $dlss5RuntimeSha256, got $actualHash. Download the validated nvngx_dlssnr.dll again."
-    }
-}
-
 function Get-Sha256 {
     param([string]$Path)
     $sha256 = [System.Security.Cryptography.SHA256]::Create()
@@ -76,6 +65,16 @@ function Get-Sha256 {
         return ([BitConverter]::ToString($sha256.ComputeHash([IO.File]::ReadAllBytes($Path)))).Replace('-', '')
     } finally {
         $sha256.Dispose()
+    }
+}
+
+function Assert-Dlss5Runtime {
+    if (-not (Test-Path -LiteralPath $dlss5Runtime -PathType Leaf)) {
+        throw "DLSS5 runtime is missing. Download nvngx_dlssnr.dll, then run Install-DLSS5-Runtime.bat or place it at '$dlss5Runtime'. International: $dlss5RuntimeGoogleDrive ; China: $dlss5RuntimeBaidu (code: qisz)"
+    }
+    $actualHash = Get-Sha256 -Path $dlss5Runtime
+    if (-not $actualHash.Equals($dlss5RuntimeSha256, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "DLSS5 runtime hash mismatch. Expected $dlss5RuntimeSha256, got $actualHash. Download the validated nvngx_dlssnr.dll again."
     }
 }
 
@@ -101,7 +100,7 @@ function Test-PackageIntegrity {
         }
         $entryCount++
     }
-    if ($entryCount -lt 8) { throw 'Package integrity manifest contains too few protected components.' }
+    if ($entryCount -lt 10) { throw 'Package integrity manifest contains too few protected components.' }
 }
 
 function Read-RequiredPath {
@@ -221,67 +220,22 @@ function Configure-ReShade {
     Set-IniValue -Path $managedIni -Section 'INPUT' -Key 'KeyOverlay' -Value '36,0,0,0'
     Set-IniValue -Path $managedIni -Section 'SCREENSHOT' -Key 'SavePath' -Value $screenshotDirectory
     if ($dlss5Profile) {
-        # ReShade loads only the bridge from DllMain. The bridge loads RenoDX
-        # after it has opened OptiScaler's private D3D12 NGX session; loading
-        # RenoDX here is too early and leaves it with zero NGX detours.
-        # Graphics hooks remain disabled by the launcher environment, so this is
-        # an Add-on API host rather than a competing D3D11/DXGI wrapper.
-        $bridgeStage = 3
-        $bridgeMode = 2
-        $skipGame = 1
-        $renodxEnabled = $true
-        # Match the known-good v1.1 control profile. The add-on may first probe
-        # low-resolution NR and then fall back to its native-resolution pass;
-        # standard spatial upscaling remains owned by the game/OptiScaler path.
-        $nrUpscalingEnabled = $true
-        $qualityOverride = -1
-        $dredEnabled = $false
-        $loadFromDllMain = 'dlss5-dx11-bridge.addon64'
+        # ReShade loads the pre-NR observer from DllMain. It sees the private
+        # D3D12 NGX call generated by OptiScaler, then uses nrchain_nvngx.dll to
+        # submit signed Feature 18 before the original Feature 1 evaluation.
+        # Graphics hooks remain disabled, so ReShade is an Add-on API host rather
+        # than a competing D3D11/DXGI wrapper.
+        # Mode 2 is the validated low-resolution 1:1 NR -> original DLSS SR path.
+        # The add-on preserves the original SR call when Feature 18 fails.
+        $loadFromDllMain = 'nr-before-sr.zh-CN.addon64'
         Set-IniValue -Path $managedIni -Section 'ADDON' -Key 'LoadFromDllMain' -Value $loadFromDllMain
-        # It must not be disabled: RenoDX registers with ReShade when the bridge
-        # loads it later from the deferred-reno subdirectory.
+        # Keep the observer enabled so it can register its NGX hooks.
         Set-IniValue -Path $managedIni -Section 'ADDON' -Key 'DisabledAddons' -Value ''
-        if ($renodxEnabled) {
-            Set-IniValue -Path $managedIni -Section 'RenoDX.DLSS5' -Key 'EnableHooks' -Value '2'
-            Set-IniValue -Path $managedIni -Section 'RenoDX.DLSS5' -Key 'NeuralUplift' -Value '1'
-            Set-IniValue -Path $managedIni -Section 'RenoDX.DLSS5' -Key 'NREnableUpscaling' -Value $(if ($nrUpscalingEnabled) { '1' } else { '0' })
-            Set-IniValue -Path $managedIni -Section 'RenoDX.DLSS5' -Key 'NRAutoMask' -Value '1'
-            Set-IniValue -Path $managedIni -Section 'RenoDX.DLSS5' -Key 'NRColorStrength' -Value '1'
-            Set-IniValue -Path $managedIni -Section 'RenoDX.DLSS5' -Key 'NRIntensity' -Value '2'
-            Set-IniValue -Path $managedIni -Section 'RenoDX.DLSS5' -Key 'NRLocalStructure' -Value '0.97'
-            Set-IniValue -Path $managedIni -Section 'RenoDX.DLSS5' -Key 'NRLocalTone' -Value '1.14'
-            Set-IniValue -Path $managedIni -Section 'RenoDX.DLSS5' -Key 'NRSkinStructure' -Value '1.88'
-            Set-IniValue -Path $managedIni -Section 'RenoDX.DLSS5' -Key 'NRStyle' -Value '0'
-            Set-IniValue -Path $managedIni -Section 'RenoDX.DLSS5' -Key 'NRTransferStrength' -Value '0.6'
-            Set-IniValue -Path $managedIni -Section 'RenoDX.DLSS5' -Key 'NRUICorrection' -Value '1'
-        }
-        if ($null -ne $bridgeStage) {
-            $bridgeConfig = @(
-                '# Managed DLSS5 isolation profile'
-                "stage=$bridgeStage"
-                "mode=$bridgeMode"
-                'flags=-1'
-                "quality=$qualityOverride"
-                'subrects=1'
-                'reset_every=0'
-                'pixels=0'
-                "skip_game=$skipGame"
-                "dred=$(if ($dredEnabled) { 1 } else { 0 })"
-                'skip_exe=1'
-                "defer_reno=$(if ($renodxEnabled) { 1 } else { 0 })"
-            ) -join "`r`n"
-            Write-Utf8File -Path (Join-Path $dlss5BridgeAddonDirectory 'dlss5-dx11-bridge.cfg') -Content ($bridgeConfig + "`r`n")
-            $State['DLSS5BridgeStage'] = $bridgeStage
-            $State['DLSS5BridgeMode'] = $bridgeMode
-            $State['DLSS5SkipGame'] = $skipGame
-            $State['RenoDxEnabled'] = $renodxEnabled
-        }
-        # The bridge and its deferred add-on share this config snapshot, so the
-        # evidence directory contains exactly the RenoDX settings used at run time.
+        # Keep a runtime config snapshot beside the pre-NR add-on for diagnostics.
         Copy-Item -LiteralPath $managedIni -Destination (Join-Path $dlss5BridgeAddonDirectory 'ReShade.ini') -Force
         $State['DLSS5AddonDirectory'] = $dlss5BridgeAddonDirectory
         $State['DLSS5BridgeAddon'] = $dlss5BridgeAddon
-        $State['DLSS5RenoDxAddon'] = $dlss5RenoDxAddon
+        $State['DLSS5NrChainBridge'] = $dlss5NrChainBridge
         $State['DLSS5Runtime'] = $dlss5Runtime
     }
     $State['ManagedReShadeIni'] = $managedIni
@@ -310,7 +264,13 @@ function Configure-OptiScaler {
     if (-not (Test-Path -LiteralPath $optiIni -PathType Leaf)) {
         Copy-Item -LiteralPath $optiTemplate -Destination $optiIni -Force
     }
-    Set-IniValue -Path $optiIni -Section 'Upscalers' -Key 'Dx11Upscaler' -Value 'dlss'
+    Set-IniValue -Path $optiIni -Section 'Upscalers' -Key 'Dx11Upscaler' -Value 'dlss_12'
+    # Genshin exposes its temporal-upscaler inputs through the DX11 FSR2 ABI.
+    # OptiScaler v0.2 defaults this switch to DX12, so pin all three input
+    # selectors explicitly to keep the game contract on the correct API.
+    Set-IniValue -Path $optiIni -Section 'Inputs' -Key 'EnableFsr2Inputs' -Value 'true'
+    Set-IniValue -Path $optiIni -Section 'Inputs' -Key 'UseFsr2Inputs' -Value 'true'
+    Set-IniValue -Path $optiIni -Section 'Inputs' -Key 'UseFsr2Dx11Inputs' -Value 'true'
     Set-IniValue -Path $optiIni -Section 'FrameGen' -Key 'Enabled' -Value 'false'
     Set-IniValue -Path $optiIni -Section 'FrameGen' -Key 'FGInput' -Value 'nofg'
     Set-IniValue -Path $optiIni -Section 'FrameGen' -Key 'FGOutput' -Value 'nofg'
@@ -320,6 +280,9 @@ function Configure-OptiScaler {
     Set-IniValue -Path $optiIni -Section 'Libraries' -Key 'NvngxFeaturePath' -Value $optiDirectory
     Set-IniValue -Path $optiIni -Section 'DLSS' -Key 'Enabled' -Value 'true'
     Set-IniValue -Path $optiIni -Section 'DLSS' -Key 'UseGenericAppIdWithDlss' -Value 'true'
+    # The external Mode-2 add-on owns the only Neural Rendering pass. Keep
+    # OptiScaler's built-in post-upscale pass off to prevent double NR.
+    Set-IniValue -Path $optiIni -Section 'DlssNr' -Key 'Enabled' -Value 'false'
     Set-IniValue -Path $optiIni -Section 'Hooks' -Key 'SkipD3D11DeviceVTableHooks' -Value 'true'
     Set-IniValue -Path $optiIni -Section 'Menu' -Key 'OverlayMenu' -Value 'true'
     Set-IniValue -Path $optiIni -Section 'Menu' -Key 'ShortcutKey' -Value '0x2D'
@@ -448,7 +411,7 @@ Assert-File $reShadeDll 'ReShade64.dll'
 Assert-File $reShadeIniTemplate 'ReShade template'
 Assert-File $reShadePreset 'ReShade preset'
 Assert-File $dlss5BridgeAddon 'DLSS5 DX11 bridge add-on'
-Assert-File $dlss5RenoDxAddon 'RenoDX DLSS5 add-on'
+Assert-File $dlss5NrChainBridge 'DLSS5 private NR chain bridge'
 Assert-Dlss5Runtime
 New-Item -ItemType Directory -Force -Path $stateDirectory | Out-Null
 Test-PackageIntegrity
@@ -489,9 +452,10 @@ $state = @{
 $state['InjectionOrder'] = @(
     'GIMI d3d11 preload',
     'ReShade64.dll passive Add-on host (graphics hooks disabled)',
-    'DLSS5 DX11 bridge registered from ReShade DllMain; RenoDX loaded after private D3D12 NGX session',
+    'NR-before-SR add-on registered from ReShade DllMain',
     'Dx11FsrBridge.dll',
-    'Patched OptiScaler.dll with DLSS 310.8',
+    'Patched OptiScaler v0.2.0 DLSS-on-DX12 bridge',
+    'Low-resolution 1:1 DLSS5 NR followed by original DLSS Super Resolution',
     'GIMI-hosted ReShade runtime on final Present'
 )
 Install-GimiRuntime -DestinationDirectory $GimiPath -State $state
@@ -516,11 +480,11 @@ if ([int]$state['GimiModIniCount'] -gt 0) {
 if ($state.ContainsKey('HealthBarStoreDisabled')) {
     Write-Host '  HealthBar compatibility: unsupported store directive disabled (original backed up in state)' -ForegroundColor Yellow
 }
-Write-Host '  Mode: validated r12 chain (v1.1 control profile + continuous Native NR)'
-Write-Host '  DLL order: GIMI preload -> passive ReShade Add-on host -> Dx11FsrBridge -> patched OptiScaler -> RenoDX Native NR -> GIMI final Present + hosted ReShade'
+Write-Host '  Mode: render-resolution DLSS5 NR -> original DLSS Super Resolution'
+Write-Host '  DLL order: GIMI preload -> passive ReShade Add-on host -> NR-before-SR -> Dx11FsrBridge -> DLSS-on-DX12 -> GIMI final Present'
 Write-Host '  ReShade: hosted by GIMI after the final upscaled frame; press Home in-game to open its overlay.'
-Write-Host '  DLSS5: passive Add-on host is enabled; RenoDX hooks only NGX (no ReShade graphics hooks).'
-Write-Host '  Control profile: v1.1 requests NR upscaling; this runtime safely falls back to continuous native-resolution NR while DLSS remains the spatial upscaler.' -ForegroundColor Yellow
+Write-Host '  DLSS5: Mode 2 runs Feature 18 at render resolution before DLSS Feature 1.'
+Write-Host '  Control profile: OptiScaler built-in post-NR is disabled; original DLSS owns final spatial upscaling.' -ForegroundColor Yellow
 
 if ($ConfigureOnly) { exit 0 }
 

@@ -5,17 +5,17 @@
 - Source: https://github.com/bo3b/3Dmigoto.git
 - Base commit: `8f329bd94fecc9bbcb9211ffd42a95dd7fe6b43e`
 - License: GPL-3.0-only，见 `LICENSES/3Dmigoto-GPL-3.0.txt`
-- Local changes: 外部 D3D11 Device/Context 包装、HDR SwapChain、Hosted ReShade Runtime、UnlockFPS 注入兼容
+- Local changes: 外部 D3D11 Device/Context 包装、HDR SwapChain、Hosted ReShade Runtime、UnlockFPS 注入兼容、OptiScaler 原生 Context 通道、Hosted ReShade HDR10/PQ 色彩空间传递
 - Patch: `src/patches/3Dmigoto-GIMI-hosted-reshade.patch`
 
-## OptiScaler
+## OptiScaler DLSSNR fork
 
-- Source: https://github.com/optiscaler/OptiScaler.git
-- Base commit: `c983a500335134ecff512bfcdadcf912d1286547`
-- Runtime version: `10.0.0-dev (c983a50)`
+- Source: https://github.com/Dagherbou/OptiScaler_DLSSNR.git
+- Base commit: `973761621353b99bee3dc7d4bb27b117fef2644f`
+- Runtime family: OptiScaler v0.2 DLSS-on-DX12 / DLSSNR experimental fork
 - License: GPL-3.0，见 `LICENSES/OptiScaler-GPL-3.0.txt`
-- Local changes: GIMI Device/Context 原生接口解析、NGX 初始化/Create/Evaluate 兼容；DX11 Present API 类型守卫；发行配置不使用 OptiScaler Hosted ReShade
-- Patches: `src/patches/OptiScaler-GIMI-DX11-interop.patch`、`src/patches/OptiScaler-DX11-Present-API-guard.patch`
+- Local changes: GIMI Device/Context 原生接口解析；DX11 Present API 类型守卫；原神 R10 共享颜色的 FP16 提升；`nrchain_nvngx.dll` 私有桥名称排除；发行配置不使用 OptiScaler Hosted ReShade 或内置 post-NR
+- Patch: `src/patches/OptiScaler-DLSSOn12-GIMI-pre-NR.patch`
 
 ## Dx11FsrBridge
 
@@ -23,7 +23,8 @@
 - Commit: `620f47ca3f6959bc27b7866e4f8db813df8bbcc4`
 - Runtime version: `1.2.3.0`
 - License: GPL-3.0，见 `LICENSES/Dx11FsrBridge-GPL-3.0.txt`
-- Role: 捕获原神 DX11 FSR2 输入并通过正式 Mode 2 路径交给 OptiScaler
+- Role: 捕获原神 DX11 FSR2 输入、提供渲染比例档位并通过 Mode 2 路径交给 OptiScaler
+- Local changes: DLL 代码未修改；发行包只固定 `Dx11FsrBridge.ini` 中当前原神版本的输入翻译和渲染比例配置
 
 ## genshin-fps-unlock
 
@@ -42,11 +43,14 @@
 - Integration: 动态解析公开 C Runtime API；不静态链接，不启用图形 Hook；Hosted 更新路径补发逐帧 Add-on 事件
 - Patch: `src/patches/ReShade-hosted-addon-present-events.patch`
 
-## DLSS5 DX11 Bridge / RenoDX Add-on
+## DLSS5 前置 NR Add-on / 私有桥
 
-- Reference package: https://github.com/CXP-2024/dlss5_for_genshinimpact/
-- Role: 私有 D3D12 NGX 会话、DX11/DX12 资源运输、延迟加载 RenoDX DLSS5 Add-on
-- `nvngx_dlssnr.dll` 不提交到本仓库；README 提供国内外下载位置与固定 SHA-256
+- Binary package attribution: Bilibili UP 主 **野生的装机宅**，用户提供的发布包名为 `B站野生的装机宅 DLSS5-AI渲染超分版-RTX50.zip`
+- `nr-before-sr.zh-CN.addon64`: 原包二进制未修改，SHA-256 `522D979CBFF335710F362B9FC2F330988673D7F8C7A1A2D93DA9980EC8DDA695`
+- `nrchain_nvngx.dll`: 原包二进制未修改，SHA-256 `DB26E486592B252072BA5734FC2B27412863B8526826225640C837D4B4D11B60`
+- Configuration-only change: `nr_before_sr.ini` 从上游默认 `Mode=1` 改为本项目验证的 `Mode=2`；Add-on 与私有桥本体未反编译修改
+- The Add-on's HDR composition method is derived from clshortfuse/RenoDX under MIT; full notice is kept beside the Add-on in `components/DLSS5/Addons/pre-nr/THIRD_PARTY_NOTICES.txt`
+- `nvngx_dlssnr.dll` 原样使用但不提交 GitHub；README 与安装脚本提供下载位置、目标路径和固定 SHA-256
 
 ## Lilium ReShade HDR Shaders
 

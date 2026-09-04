@@ -1,5 +1,5 @@
 diff --git a/source/addon.cpp b/source/addon.cpp
-index 105d9ee..9a71e07 100644
+index 105d9eef5d70102e853d4d2803be43e8c9d6178a..9a71e07dc84db598596a20fc711f966ec89c3543 100644
 --- a/source/addon.cpp
 +++ b/source/addon.cpp
 @@ -267,9 +267,21 @@ void ReShadeUpdateAndPresentEffectRuntime(reshade::api::effect_runtime *runtime)
@@ -25,3 +25,29 @@ index 105d9ee..9a71e07 100644
  }
  
  #endif
+diff --git a/source/dxgi/dxgi_swapchain.cpp b/source/dxgi/dxgi_swapchain.cpp
+index ce7d6acb0bd01edde2d72845a36acd3696e6dc40..6012e465ac40dc7ebdf17353794a46d625a3ae04 100644
+--- a/source/dxgi/dxgi_swapchain.cpp
++++ b/source/dxgi/dxgi_swapchain.cpp
+@@ -404,6 +404,21 @@ HRESULT STDMETHODCALLTYPE DXGISwapChain::ResizeBuffers(UINT BufferCount, UINT Wi
+ 		_orig->GetDesc(&desc);
+ 		g_in_dxgi_runtime = was_in_dxgi_runtime;
+ 
++		// GIMI exposes the game's HDR swap chain as R10G10B10A2, but its
++		// wrapper rejects the resize parameters ReShade normally uses
++		// (one buffer and an sRGB format). Keep the original HDR contract in
++		// ReShade's descriptor as well, so HDR-aware effects continue to see
++		// the correct colour space after the resize.
++		const bool preserve_hdr_swapchain =
++			desc.BufferDesc.Format == DXGI_FORMAT_R10G10B10A2_UNORM &&
++			(NewFormat != DXGI_FORMAT_UNKNOWN && NewFormat != DXGI_FORMAT_R10G10B10A2_UNORM);
++		if (preserve_hdr_swapchain)
++		{
++			NewFormat = DXGI_FORMAT_UNKNOWN;
++			if (desc.BufferCount >= 2 && BufferCount != 0 && BufferCount < 2)
++				BufferCount = desc.BufferCount;
++		}
++
+ 		// Restore default parameters to tho original values, rather than leaving them at the last values potentially overridden by an add-on
+ 		if (0 == BufferCount)
+ 			BufferCount = _orig_desc.BufferCount;

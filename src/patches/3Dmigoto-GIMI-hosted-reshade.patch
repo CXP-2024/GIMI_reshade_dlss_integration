@@ -1,5 +1,5 @@
 diff --git a/DirectX11/CommandList.cpp b/DirectX11/CommandList.cpp
-index 6758d9f..a90438b 100644
+index 6758d9f161a9d75284181ca96ae4677169bebdb3..a90438bd8fefd2afe3f0330c2b436d94b1b269ce 100644
 --- a/DirectX11/CommandList.cpp
 +++ b/DirectX11/CommandList.cpp
 @@ -1739,7 +1739,7 @@ void Draw3DMigotoOverlayCommand::run(CommandListState *state)
@@ -11,11 +11,50 @@ index 6758d9f..a90438b 100644
  		mHackerSwapChain->mOverlay->DrawOverlay();
  		G->suppress_overlay = true;
  	}
+diff --git a/DirectX11/HackerContext.cpp b/DirectX11/HackerContext.cpp
+index a0a8d701bc85614c936a1f5c011c1607125f3c5f..a335ec7c5baba3aee53591ab1f4ecaa733a04739 100644
+--- a/DirectX11/HackerContext.cpp
++++ b/DirectX11/HackerContext.cpp
+@@ -981,6 +981,16 @@ HRESULT STDMETHODCALLTYPE HackerContext::QueryInterface(
+ 		return S_OK;
+ 	}
+ 
++	if (ppvObject && IsEqualIID(riid, IID_GimiPassThroughContext)) {
++		// mOrigContext1 is GIMI's trampoline object when vtable hooks are
++		// enabled. Calls through it go straight to the saved system D3D11
++		// functions and cannot recurse through HookedContext.cpp.
++		mOrigContext1->AddRef();
++		*ppvObject = mOrigContext1;
++		LogInfo("  return GIMI pass-through context %p for private interop\n", mOrigContext1);
++		return S_OK;
++	}
++
+ 	HRESULT hr = mOrigContext1->QueryInterface(riid, ppvObject);
+ 	if (FAILED(hr))
+ 	{
+diff --git a/DirectX11/HackerContext.h b/DirectX11/HackerContext.h
+index 33c26e189e49d79e50b474122ff1745201faa1a2..39958746d7e23a596753e33a220a1386122b2634 100644
+--- a/DirectX11/HackerContext.h
++++ b/DirectX11/HackerContext.h
+@@ -15,6 +15,13 @@
+ DEFINE_GUID(IID_HackerContext,
+ 0xa3046b1e, 0x336b, 0x4d90, 0x9f, 0xd6, 0x23, 0x4b, 0xc0, 0x9b, 0x86, 0x87);
+ 
++// Private interop contract for components that must submit internal D3D11
++// work without re-entering GIMI's process-wide context hooks. QueryInterface
++// returns the ID3D11DeviceContext1 trampoline owned by HackerContext.
++// {91ACFD68-5A6F-45EA-B8D0-71ACC32151B7}
++DEFINE_GUID(IID_GimiPassThroughContext,
++0x91acfd68, 0x5a6f, 0x45ea, 0xb8, 0xd0, 0x71, 0xac, 0xc3, 0x21, 0x51, 0xb7);
++
+ 
+ // Self forward reference for the factory interface.
+ class HackerContext;
 diff --git a/DirectX11/HackerDXGI.cpp b/DirectX11/HackerDXGI.cpp
-index 82cfd09..25c0a35 100644
+index 82cfd092a9923cc330784689a3baada2bb0290e6..ea04a766f9d468890760c897b4897ce1cf269037 100644
 --- a/DirectX11/HackerDXGI.cpp
 +++ b/DirectX11/HackerDXGI.cpp
-@@ -72,6 +72,205 @@
+@@ -72,6 +72,230 @@
  #include "profiling.h"
  #include "cursor.h" // For InstallHookLate
  
@@ -35,6 +74,12 @@ index 82cfd09..25c0a35 100644
 +using ReShadeUpdateAndPresentEffectRuntimeFn = void (*)(void *runtime);
 +
 +constexpr uint32_t kReShadeD3D11Api = 0xb000;
++
++// ReShade normally records the active DXGI color space from its SetColorSpace1
++// hook under this private-data key. The hosted runtime intentionally disables
++// graphics hooks, so GIMI must provide the equivalent metadata itself.
++constexpr GUID kReShadeSwapChainColorSpaceKey =
++	{ 0x18b57e4, 0x1493, 0x4953, { 0xad, 0xf2, 0xde, 0x6d, 0x99, 0xcc, 0x5, 0xe5 } };
 +
 +static std::wstring GetEnvironmentValue(const wchar_t *name)
 +{
@@ -180,6 +225,25 @@ index 82cfd09..25c0a35 100644
 +		}
 +
 +		ID3D11DeviceContext1 *context = hacker_context->GetPassThroughOrigContext1();
++
++		// Genshin's native HDR path uses an R10G10B10A2 swap chain and exposes
++		// IDXGISwapChain3 directly, so SetColorSpace1 bypasses this wrapper. Without
++		// ReShade's normal DXGI hook, its hosted runtime otherwise assumes sRGB and
++		// writes raw PQ values into an 8-bit SDR screenshot, producing a grey image.
++		// Mirror ReShade's hook metadata before creating the hosted runtime so it
++		// selects the tagged 16-bit HDR PNG path and compiles effects for HDR10/PQ.
++		DXGI_SWAP_CHAIN_DESC swap_desc = {};
++		if (SUCCEEDED(swap_chain->GetDesc(&swap_desc)) &&
++			swap_desc.BufferDesc.Format == DXGI_FORMAT_R10G10B10A2_UNORM)
++		{
++			const DXGI_COLOR_SPACE_TYPE color_space =
++				DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
++			const HRESULT color_space_hr = swap_chain->SetPrivateData(
++				kReShadeSwapChainColorSpaceKey, sizeof(color_space), &color_space);
++			LogInfo("GIMI hosted ReShade HDR10/PQ metadata %s (%x)\n",
++				SUCCEEDED(color_space_hr) ? "installed" : "failed", color_space_hr);
++		}
++
 +		std::string utf8_config = ToUtf8(config_path);
 +		const bool created = create(kReShadeD3D11Api, device, context, swap_chain,
 +			utf8_config.c_str(), &mRuntime);
@@ -221,7 +285,7 @@ index 82cfd09..25c0a35 100644
  
  // -----------------------------------------------------------------------------
  // SetWindowPos hook, activated by full_screen=2 in d3dx.ini
-@@ -349,6 +548,28 @@ STDMETHODIMP HackerSwapChain::QueryInterface(THIS_
+@@ -349,6 +573,28 @@ STDMETHODIMP HackerSwapChain::QueryInterface(THIS_
  		return hr;
  	}
  
@@ -250,7 +314,7 @@ index 82cfd09..25c0a35 100644
  	// For TheDivision, only upon Win10, it will request these.  Even though the object
  	// we would return is the exact same pointer in memory, it still calls into the object
  	// with a vtable entry that does not match what they expected. Somehow they decide
-@@ -560,6 +781,10 @@ STDMETHODIMP HackerSwapChain::Present(THIS_
+@@ -560,6 +806,10 @@ STDMETHODIMP HackerSwapChain::Present(THIS_
  		// which enables hunting, and snapshots, and aiming overrides and other inputs
  		RunFrameActions();
  
@@ -261,7 +325,7 @@ index 82cfd09..25c0a35 100644
  		if (profiling)
  			Profiling::end(&profiling_state, &Profiling::present_overhead);
  	}
-@@ -701,6 +926,36 @@ STDMETHODIMP HackerSwapChain::ResizeBuffers(THIS_
+@@ -701,6 +951,36 @@ STDMETHODIMP HackerSwapChain::ResizeBuffers(THIS_
  			G->mResolutionInfo.width, G->mResolutionInfo.height);
  	}
  
@@ -298,7 +362,7 @@ index 82cfd09..25c0a35 100644
  	HRESULT hr = mOrigSwapChain1->ResizeBuffers(BufferCount, Width, Height, NewFormat, SwapChainFlags);
  
  	LogInfo("  returns result = %x\n", hr);
-@@ -867,6 +1122,8 @@ STDMETHODIMP HackerSwapChain::Present1(THIS_
+@@ -867,6 +1147,8 @@ STDMETHODIMP HackerSwapChain::Present1(THIS_
  		// which enables hunting, and snapshots, and aiming overrides and other inputs
  		RunFrameActions();
  
@@ -308,7 +372,7 @@ index 82cfd09..25c0a35 100644
  			Profiling::end(&profiling_state, &Profiling::present_overhead);
  	}
 diff --git a/DirectX11/HookedDXGI.cpp b/DirectX11/HookedDXGI.cpp
-index 53b5087..7cff511 100644
+index 53b5087396fcac32db3a4441e70a69e01b4c6df8..7cff511f511e1fabe97df1389adac79fa3eb1973 100644
 --- a/DirectX11/HookedDXGI.cpp
 +++ b/DirectX11/HookedDXGI.cpp
 @@ -127,6 +127,64 @@ static HackerDevice* prepare_devices_for_dx12_warning(IUnknown *unknown_device)
@@ -462,7 +526,7 @@ index 53b5087..7cff511 100644
  	HackerDevice *hackerDevice = NULL;
  	DXGI_SWAP_CHAIN_DESC origSwapChainDesc;
 diff --git a/DirectX11/IniHandler.cpp b/DirectX11/IniHandler.cpp
-index 2c88983..cca0036 100644
+index 2c88983ba08bcc367831df8ab235e2628e41d43d..cca00366e770d6b64485480d8c7a94989d15b886 100644
 --- a/DirectX11/IniHandler.cpp
 +++ b/DirectX11/IniHandler.cpp
 @@ -4154,6 +4154,7 @@ void LoadConfigFile()
@@ -474,7 +538,7 @@ index 2c88983..cca0036 100644
  	G->check_foreground_window = GetIniBool(L"System", L"check_foreground_window", false, NULL);
  
 diff --git a/DirectX11/globals.h b/DirectX11/globals.h
-index 111e77c..bdf0bbf 100644
+index 111e77c827d85615d2080d352c23f6a5bd1fefe2..bdf0bbf4b06d86fb2dab4c270f70d29c7cad73d8 100644
 --- a/DirectX11/globals.h
 +++ b/DirectX11/globals.h
 @@ -418,6 +418,9 @@ struct Globals
@@ -496,7 +560,7 @@ index 111e77c..bdf0bbf 100644
  		bIntendedTargetExe(false),
  		gReloadConfigPending(false),
 diff --git a/Injector/Injector.cpp b/Injector/Injector.cpp
-index db238c3..065fa01 100755
+index db238c31abc4f0c907a5a70c61e2f030a2d4b7f9..065fa0110034b6f31d4958e3ccea55b65c60bead 100755
 --- a/Injector/Injector.cpp
 +++ b/Injector/Injector.cpp
 @@ -10,6 +10,38 @@

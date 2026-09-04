@@ -8,8 +8,8 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $root = Split-Path -Parent $PSCommandPath
-$destination = Join-Path $root 'components\DLSS5\Addons\bridge-addons\deferred-reno\nvngx_dlssnr.dll'
-$expectedSha256 = '4C5BD1171C7336B4B04FB394DE51DA285AB6EAD6F922D7AFDEC163F71C319D74'
+$destination = Join-Path $root 'components\DLSS5\Addons\pre-nr\nvngx_dlssnr.dll'
+$expectedSha256 = 'E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E'
 
 Write-Host 'DLSS5 runtime download:' -ForegroundColor Cyan
 Write-Host '  International: https://drive.google.com/file/d/1L7Pi4adSQal_OxpEzTMuT0NfeQTKIK-_/view?usp=sharing'

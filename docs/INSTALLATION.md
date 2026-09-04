@@ -16,7 +16,7 @@ Downloads 中的完整离线包已经包含 Runtime，可以跳过本节。GitHu
 - 国外：[Google Drive](https://drive.google.com/file/d/1L7Pi4adSQal_OxpEzTMuT0NfeQTKIK-_/view?usp=sharing)
 - 国内：[百度网盘](https://pan.baidu.com/s/1SAm1-QL0YvH8Kc28OGigAA?pwd=qisz)，提取码 `qisz`
 
-下载后双击 `Install-DLSS5-Runtime.bat`，把文件拖入窗口并回车。脚本只接受文件名为 `nvngx_dlssnr.dll` 且 SHA-256 为 `4C5BD1171C7336B4B04FB394DE51DA285AB6EAD6F922D7AFDEC163F71C319D74` 的版本。不要从不明来源换用同名 DLL。
+下载后双击 `Install-DLSS5-Runtime.bat`，把文件拖入窗口并回车。脚本只接受文件名为 `nvngx_dlssnr.dll` 且 SHA-256 为 `E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E` 的版本。不要从不明来源换用同名 DLL。安装目标为 `components/DLSS5/Addons/pre-nr/nvngx_dlssnr.dll`。
 
 ## 首次启动
 
@@ -43,7 +43,7 @@ Downloads 中的完整离线包已经包含 Runtime，可以跳过本节。GitHu
 - `F10`：GIMI 重新加载。Mod 应保持可见，且不应出现致命退出或连续错误音。
 - `Insert`：OptiScaler 菜单。选中的后端应为 DLSS，而不是 Fallback。
 - `Home`：ReShade 菜单。启用/关闭效果应改变最终画面。
-- `F6`：RenoDX Neural Rendering。切换前后应能观察到光影差异。
+- `F6`：前置 Neural Rendering。切换前后应能观察到光影差异。
 
 日志位置：
 
@@ -51,9 +51,9 @@ Downloads 中的完整离线包已经包含 Runtime，可以跳过本节。GitHu
 - `components/OptiScaler/OptiScaler.log`
 - 所选 GIMI 目录中的 `d3d11_log.txt`
 - `state/reshade-runtime/ReShade.log`
-- `components/DLSS5/Addons/bridge-addons/dlss5-dx11-bridge.log`
+- `components/DLSS5/Addons/pre-nr/nr-before-sr.log`
 
-真正的标准 DLSS 证据是 OptiScaler 日志持续出现 `NVSDK_NGX_D3D11_EvaluateFeature`，并同时显示内部渲染分辨率和目标分辨率。真正的 DLSS5 证据是 ReShade 日志中的 native `inline feature 18 evaluation succeeded` 计数持续增长。第一次低分辨率请求返回 `0xBAD00005` 并转入 native 是已验证路径，不等于 DLSS5 整体失败。
+真正的 DLSS5 证据是 `nr-before-sr.log` 同时记录 Feature 18 在渲染分辨率的 1:1 成功执行，以及随后 Feature 1 从该渲染分辨率放大到输出分辨率。例如 `3072x1728 -> 3072x1728` 后接 `3072x1728 -> 3840x2160`。只有 Feature 1 或只加载 DLL 不算成功。
 
 ## HDR 与 ReShade 效果
 
@@ -66,7 +66,7 @@ Downloads 中的完整离线包已经包含 Runtime，可以跳过本节。GitHu
 3. 需要时改用 Lilium 的 HDR-aware CAS、亮度或 Tone Mapping 效果；
 4. 不必修改 DLL 顺序。
 
-HDR 截图在普通 SDR 查看器中也可能显得发白，优先以 HDR 显示器上的实际观感和 ReShade 菜单为准。
+Before/After 截图会保存为带 BT.2020/PQ 标记的 16 位 HDR PNG。请用支持 HDR 色彩管理的查看器；普通 SDR 平台需要先做 HDR→SDR 色调映射。
 
 ## 常见问题
 

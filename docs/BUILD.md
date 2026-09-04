@@ -20,33 +20,32 @@ $msbuild = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBui
   "/p:SolutionDir=$((Get-Location).Path)\" /p:WindowsTargetPlatformVersion=10.0.26100.0
 ```
 
-输出 `builds/x64/Release/d3d11.dll`。r12 已验证构建的 SHA-256：
+输出 `builds/x64/Release/d3d11.dll`。当前已验证构建包含 Hosted ReShade HDR10/PQ 色彩空间传递，SHA-256：
 
 ```text
-6B12A4CD3164D6DCD634E30086DC8A6B4D2B5821D947227C4742ADA39CCCBFB7
+B85512DEE19BFBA65978F9011C6551E0DDD6F52FAEC6F6DDA1714F948CF79A80
 ```
 
 ## OptiScaler
 
 ```powershell
-git clone --recursive https://github.com/optiscaler/OptiScaler.git
-Set-Location OptiScaler
-git checkout c983a500335134ecff512bfcdadcf912d1286547
-git apply ..\GIMI_reshade_integration\src\patches\OptiScaler-GIMI-DX11-interop.patch
-git apply ..\GIMI_reshade_integration\src\patches\OptiScaler-DX11-Present-API-guard.patch
+git clone --recursive https://github.com/Dagherbou/OptiScaler_DLSSNR.git
+Set-Location OptiScaler_DLSSNR
+git checkout 973761621353b99bee3dc7d4bb27b117fef2644f
+git apply ..\GIMI_reshade_integration\src\patches\OptiScaler-DLSSOn12-GIMI-pre-NR.patch
 ```
 
-用 Visual Studio 2022 打开 `OptiScaler.sln` 并构建 x64 Release。补丁包含 GIMI 原生 Device/Context 解析和本次二进制中的兼容开关；最终发行配置保持 `Plugins.LoadReShade=false`，因为 ReShade 由 GIMI 托管。
+用 Visual Studio 2022 打开 `OptiScaler.sln` 并构建 x64 Release。补丁包含 GIMI 原生 Device/Context 解析、跨 API 守卫、原神 R10 共享颜色的 FP16 转换和 `nrchain_nvngx.dll` 名称冲突修复；最终配置保持 `Plugins.LoadReShade=false`、`DlssNr.Enabled=false`，因为 ReShade 和唯一的 Feature 18 pass 分别由 GIMI 与外部 pre-NR Add-on 管理。
 
 已验证 `OptiScaler.dll` SHA-256：
 
 ```text
-D59A0BB2A32D3FA232A479CED1F0476D836187BD6EE30B8CCE2BD973B4463746
+B9E6D5D79D9DDF6FE7170C0DC783F3D40825CAC8338CE4CD1D24E7EFE9A84760
 ```
 
 ## Dx11FsrBridge
 
-Bridge 使用 `AizawaHikaru233/genshin_fsr_brigde` 的提交 `620f47ca3f6959bc27b7866e4f8db813df8bbcc4`，运行时版本为 1.2.3.0。按上游解决方案构建 x64 Release；游戏版本相关 RVA 位于 `components/Bridge/Dx11FsrBridge.ini`。
+Bridge 使用 `AizawaHikaru233/genshin_fsr_brigde` 的提交 `620f47ca3f6959bc27b7866e4f8db813df8bbcc4`，按上游解决方案直接构建 x64 Release。DLL 代码未做本地修改；当前原神的 FSR2 输入翻译、渲染比例档位和版本相关 RVA 固定在 `components/Bridge/Dx11FsrBridge.ini`。
 
 已验证 DLL SHA-256：
 
@@ -83,12 +82,12 @@ git apply ..\GIMI_reshade_integration\src\patches\ReShade-hosted-addon-present-e
 084FA6B41AC9FC0CF66055E95C91C69A5BEF153612DDA15E18EACB21C9F52C54
 ```
 
-## DLSS5 Bridge 与 RenoDX
+## DLSS5 前置 NR Add-on 与私有桥
 
-发布布局只保留 `components/DLSS5/Addons/bridge-addons` 下实际使用的 Bridge 和 deferred RenoDX Add-on。约 158 MiB 的 `nvngx_dlssnr.dll` 不提交到 GitHub；发布完整离线包时从已验证来源加入，并核对 SHA-256：
+`nr-before-sr.zh-CN.addon64` 与 `nrchain_nvngx.dll` 来自 Bilibili UP 主“野生的装机宅”提供的 `DLSS5-AI渲染超分版-RTX50` 包，本仓库没有修改这两个二进制。唯一配置变化是把 `nr_before_sr.ini` 的默认 `Mode=1` 改为已验证的 `Mode=2`。约 165 MB 的 `nvngx_dlssnr.dll` 不提交到 GitHub；完整离线包加入后必须核对：
 
 ```text
-4C5BD1171C7336B4B04FB394DE51DA285AB6EAD6F922D7AFDEC163F71C319D74
+E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E
 ```
 
 ## 发布布局
@@ -100,10 +99,11 @@ components/Bridge/Dx11FsrBridge.ini
 components/OptiScaler/OptiScaler.dll
 components/OptiScaler/nvngx_dlss.dll
 components/ReShade/ReShade64.dll
-components/DLSS5/Addons/bridge-addons/dlss5-dx11-bridge.addon64
-components/DLSS5/Addons/bridge-addons/deferred-reno/renodx-dlss5.addon64
+components/DLSS5/Addons/pre-nr/nr-before-sr.zh-CN.addon64
+components/DLSS5/Addons/pre-nr/nrchain_nvngx.dll
+components/DLSS5/Addons/pre-nr/nr_before_sr.ini
 # Full offline archive only:
-components/DLSS5/Addons/bridge-addons/deferred-reno/nvngx_dlssnr.dll
+components/DLSS5/Addons/pre-nr/nvngx_dlssnr.dll
 Configure-And-Launch.ps1
 Install-DLSS5-Runtime.ps1
 Launch-Genshin-GIMI-DLSS-ReShade.bat

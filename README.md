@@ -1,87 +1,98 @@
-# GIMI + DLSS + DLSS 5 Neural Rendering + ReShade
+# GIMI + ReShade + DLSS + DLSS 5 前置神经渲染
 
-这是原神 DX11 下的四组件兼容整合：GIMI Mod、DLSS 空间超分、DLSS 5 Neural Rendering（RenoDX）与 ReShade 后处理可以在同一局游戏中持续工作。2026-09-04 的 r12 已完成实机验证：GIMI Mod 与 ReShade 正常，标准 DLSS 保持低分辨率到输出分辨率的超分，Native NR 成功帧数连续增长并产生可见的光影变化。
+这是原神 DX11 下经过实机验证的四组件整合。当前版本不再使用旧版“DLSS 超分后再做原生分辨率 NR”的路径，而是在游戏渲染分辨率上先执行 DLSS 5 Neural Rendering，再保留原来的 DLSS Super Resolution 完成最终放大。
 
-## 下载后能否直接运行
+验证环境为 Windows 11、RTX 5080、NVIDIA 616.56 驱动、3840×2160 输出和 0.8 渲染比例：Feature 18 持续执行 `3072×1728 -> 3072×1728`，随后原 Feature 1 执行 `3072×1728 -> 3840×2160`。GIMI Mod、最终 ReShade、HDR 与截图功能同时正常。
 
-有两种发布形式：
+## 下载方式
 
-- **Downloads 完整离线压缩包**：已经包含经验证的 `nvngx_dlssnr.dll`，解压后可直接配置并启动。
-- **GitHub 仓库 / Source ZIP**：由于 `nvngx_dlssnr.dll` 约 158 MiB，不放入 GitHub。需要先下载该文件并双击 `Install-DLSS5-Runtime.bat`；脚本会校验 SHA-256 并放到正确目录。
+GitHub 仓库包含启动器、经修改的兼容组件、普通 DLSS Runtime、Shader、配置与许可证，但不包含约 165 MB 的 `nvngx_dlssnr.dll`。克隆仓库或下载 Source ZIP 后，需要先下载该文件，再运行 `Install-DLSS5-Runtime.bat`。
 
-DLSS 5 Runtime 下载：
+- 国外：[Google Drive](https://drive.google.com/file/d/1L7Pi4adSQal_OxpEzTMuT0NfeQTKIK-_/view?usp=sharing)
+- 国内：[百度网盘](https://pan.baidu.com/s/1SAm1-QL0YvH8Kc28OGigAA?pwd=qisz)，提取码 `qisz`
+- 必须匹配的 SHA-256：`E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E`
+- 安装目标：`components/DLSS5/Addons/pre-nr/nvngx_dlssnr.dll`
 
-- 国外 / Google Drive：[nvngx_dlssnr.dll](https://drive.google.com/file/d/1L7Pi4adSQal_OxpEzTMuT0NfeQTKIK-_/view?usp=sharing)
-- 国内 / 百度网盘：[nvngx_dlssnr.dll](https://pan.baidu.com/s/1SAm1-QL0YvH8Kc28OGigAA?pwd=qisz)，提取码 `qisz`
-- 必须匹配的 SHA-256：`4C5BD1171C7336B4B04FB394DE51DA285AB6EAD6F922D7AFDEC163F71C319D74`
-
-除此以外，ReShade、Dx11FsrBridge、OptiScaler、普通 DLSS DLL、DLSS5 DX11 Bridge 与 RenoDX Add-on 都已随仓库提供，不需要提前单独安装。
+完整离线包会包含这个文件，因此不需要提前安装 ReShade、OptiScaler、普通 DLSS DLL 或 DLSS5 Add-on。
 
 ## 前置条件
 
-- Windows 10/11 与支持 DLSS 的 NVIDIA RTX 显卡；显卡驱动需能正常使用 NVIDIA NGX。
-- 已安装并能正常启动的原神客户端。
-- **已有 GIMI / 3DMigoto 目录**，其中至少有 `3DMigoto Loader.exe`、`d3dx.ini`；你的 `Mods` 继续保留在该目录。本仓库不会替你下载游戏或 Mod。
-- 启动前完全退出原神、`3DMigoto Loader.exe` 和旧的 `unlockfps_nc.exe`。
+- Windows 10/11；当前签名 NR Runtime 面向 RTX 50 系和 615+ 驱动，RTX 40 暂未宣称支持。
+- 已安装并能正常运行的原神客户端。
+- 已有 GIMI / 3DMigoto 目录，其中应包含 `3DMigoto Loader.exe`、`d3dx.ini` 与用户自己的 `Mods`。
+- 启动前退出原神、旧的 `unlockfps_nc.exe` 和单独运行的 `3DMigoto Loader.exe`。
+
+不使用 GIMI 的版本由独立仓库维护，本仓库不能通过留空 GIMI 路径切换成无 GIMI 模式。
 
 ## 快速开始
 
-1. 下载完整离线包，或下载 GitHub 仓库并安装上面的 DLSS 5 Runtime。
-2. 解压到普通的可写目录，不要在压缩包预览窗口内运行。
+1. 完整解压；不要在压缩包预览窗口中运行。
+2. 如果来自 GitHub，先运行 `Install-DLSS5-Runtime.bat` 安装上述大组件。
 3. 双击 `Launch-Genshin-GIMI-DLSS-ReShade.bat`。
-4. 首次运行时输入 `GenshinImpact.exe` 的完整路径，再输入现有 GIMI 的 `3dmigoto` 目录。
-5. 以后始终通过同一个 BAT 启动；路径改变时运行 `Configure-Again.bat`。
-6. `Insert` 打开 OptiScaler；`Home` 打开最终画面的 ReShade；`F6` 切换 Neural Rendering；`F10` 重载 GIMI Mod。
+4. 首次输入 `GenshinImpact.exe` 的完整路径和现有 GIMI `3dmigoto` 目录。
+5. 以后始终从同一 BAT 启动；路径改变时运行 `Configure-Again.bat`。
+6. `Insert` 打开 OptiScaler，`Home` 打开最终 ReShade，`F6` 切换前置 NR，`F10` 重载 GIMI Mod。
 
-不要再单独启动 `3DMigoto Loader.exe`，也不要额外安装一个 ReShade `dxgi.dll` / `d3d11.dll` 到游戏目录。多一层图形 Hook 会重新引入本项目已经解决的所有权冲突。
+不要同时把另一个 ReShade `dxgi.dll`/`d3d11.dll` 放入游戏目录，也不要额外启动 GIMI Loader；这些做法会重新引入 SwapChain 和 Hook 所有权冲突。
 
-完整步骤和恢复方式见 [`docs/INSTALLATION.md`](docs/INSTALLATION.md)。
-
-## 实际生效的渲染链
+## 实际渲染链
 
 ```text
-原神 DX11 / FSR2 carrier
-  -> GIMI d3d11 预加载并成为唯一 DX11/SwapChain/Present 所有者
-  -> 被动 ReShade Add-on Host（禁用图形 Hook）注册 DLSS5 Bridge
-  -> Dx11FsrBridge 提取颜色、深度、运动向量
-  -> OptiScaler + nvngx_dlss.dll 执行标准 DLSS 空间超分
-  -> DLSS5 DX11 Bridge 建立私有 DX12 NGX 会话
-  -> RenoDX DLSS5 在最终分辨率执行 Native NR
-  -> GIMI 绘制 Mod 并提交最终 Present
-  -> GIMI 托管的 ReShade 执行最终效果与 UI
+原神 DX11 低分辨率 FSR2 carrier
+  -> GIMI：唯一 DX11 包装器和最终 Present 所有者
+  -> Dx11FsrBridge：提取颜色、深度、运动向量与抖动合同
+  -> OptiScaler DLSS-on-DX12：共享 R10 颜色并转换为 FP16
+  -> nr-before-sr Mode 2：Feature 18 在渲染分辨率执行 1:1 NR
+  -> 原始 DLSS Feature 1：从渲染分辨率放大到输出分辨率
+  -> GIMI Mod 与最终 Present
+  -> GIMI 托管 ReShade 后处理、UI 与 HDR 截图
 ```
 
-这里的“DLSS5”不是再做一次空间超分。v1.1 控制配置会先请求低分辨率 NR；当前签名 Runtime 对原神的该颜色契约返回 `0xBAD00005`。Add-on 会保留已经完成的游戏 DLSS 输出，并自动改为输出分辨率的 Native NR。健康状态因此是：菜单可能显示 `Upscaling: requested ON | active OFF | ratio 1.00`，同时 `Successful NR frames` 持续增长。这不是假成功或退回无效果。
+Feature 18 只替换原 DLSS 合同的低分辨率 Color；Depth、MotionVectors、Jitter、Exposure 和原 Feature 1 均保留。若 Feature 18 创建或执行失败，Add-on 会把未修改的游戏 Color 交还原 Feature 1，不会提交半成品。
 
-## r12 解决了什么
+技术细节见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)，实验过程与成功证据见 [`docs/PRE_NR_AUDIT.md`](docs/PRE_NR_AUDIT.md)。
 
-- GIMI 先于其他组件预加载，并独占真实 D3D11 Device、Context、SwapChain 与最终 Present；ReShade 图形 Hook 被显式关闭。
-- GIMI 能包装外部创建的 D3D11 对象，并通过私有 ABI 向 OptiScaler 提供原始 Context，修复 NGX `BAD00007 / NotInitialized`。
-- OptiScaler 的 DX11 Present 路径现在检查当前 Feature 的 API 类型，避免把 D3D11 Context 当成私有 D3D12 Command Queue。此前看似发生在 `PSSetConstantBuffers` 的崩溃，本质是跨 API 指针误用。
-- DLSS5 Bridge 先建立私有 DX12 NGX 会话，再延迟加载 RenoDX，确保其能够截获对应 NGX 调用。
-- 最关键的 r12 修复位于 Hosted ReShade：公共 Runtime 更新路径会补发正常 SwapChain Present 才有的 `execute_command_list` 与 `present` Add-on 事件。RenoDX 的逐帧 one-pass mask 因而会重置，成功 NR 帧不再停在三个持久输出资源。
-- 最终 ReShade 仍由 GIMI 在完成的画面上托管，GIMI、DLSS、DLSS5 与 ReShade 不需要争夺注册或 Hook 顺序。
+## 来源、署名与修改边界
 
-源码修改与对象所有权详见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)，复现构建见 [`docs/BUILD.md`](docs/BUILD.md)。
+| 组件 | 来源 | 本仓库的处理 |
+| --- | --- | --- |
+| 3Dmigoto / GIMI | [bo3b/3Dmigoto](https://github.com/bo3b/3Dmigoto) | **有修改**：外部对象包装、Hosted ReShade、GIMI/OptiScaler 原生 Context 通道、HDR10/PQ 元数据传递等。 |
+| ReShade 6.8 | [crosire/reshade](https://github.com/crosire/reshade) | **有修改**：Hosted Runtime 补发 Add-on 每帧事件；图形 Hook 在本组合中关闭，由 GIMI 托管最终 Runtime。 |
+| OptiScaler DLSSNR fork | [Dagherbou/OptiScaler_DLSSNR](https://github.com/Dagherbou/OptiScaler_DLSSNR)，基于 [OptiScaler](https://github.com/optiscaler/OptiScaler) | **有修改**：GIMI 互操作、DX11/12 API 守卫、R10→FP16 转换以及 `nrchain_nvngx.dll` 名称冲突修复。 |
+| Dx11FsrBridge | [AizawaHikaru233/genshin_fsr_brigde](https://github.com/AizawaHikaru233/genshin_fsr_brigde) | 二进制代码沿用固定上游提交；本仓库只固定当前原神的 FSR2 输入与渲染比例配置。 |
+| `nr-before-sr.zh-CN.addon64` | Bilibili UP 主 **野生的装机宅** 提供的“DLSS5-AI渲染超分版-RTX50”包 | **二进制未修改**，SHA-256 `522D979CBFF335710F362B9FC2F330988673D7F8C7A1A2D93DA9980EC8DDA695`；仅把配置从默认 `Mode=1` 改为本项目验证的 `Mode=2`。 |
+| `nrchain_nvngx.dll` | 同一“野生的装机宅”发布包 | **未修改**，SHA-256 `DB26E486592B252072BA5734FC2B27412863B8526826225640C837D4B4D11B60`；本仓库只修复了 OptiScaler 对其文件名的误拦截。 |
+| `nvngx_dlssnr.dll` | 同一实验发布所需的签名 NVIDIA NR Runtime | **未修改且不提交 GitHub**；安装脚本只负责 SHA-256 校验和放置。 |
+| NR HDR 合成方法 | [clshortfuse/RenoDX](https://github.com/clshortfuse/renodx) | 上游 Add-on 的 HDR 模型画面合成方法衍生自 RenoDX；MIT 声明保存在 `THIRD_PARTY_NOTICES.txt`。 |
+| genshin-fps-unlock | [34736384/genshin-fps-unlock](https://github.com/34736384/genshin-fps-unlock) | **有修改**：支持预加载 GIMI、随后按固定顺序注入其余 DLL。 |
 
-## 如何验收
+`nr-before-sr` 插件和私有桥并不是本仓库原创。本仓库不声称拥有其源代码或作者身份；仓库所做的是原神/GIMI 兼容集成、外围源码修改、配置、验证与分发整理。原始版本、固定提交和许可证明细见 [`third_party/UPSTREAM-COMMITS.md`](third_party/UPSTREAM-COMMITS.md)。
 
-游戏正常运行一段时间后退出，再双击 `Verify-Installation.bat`，或运行：
+## 如何确认不是“只显示成功”
+
+退出游戏后运行：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\Verify-Installation.ps1 -LastRun
 ```
 
-真正成功需要同时满足：
+真正成功必须在同一轮 `components/DLSS5/Addons/pre-nr/nr-before-sr.log` 中看到：
 
-- `Dx11FsrBridge.log` 持续记录 FSR2 translation dispatch；
-- `OptiScaler.log` 持续执行标准 DLSS，输入分辨率小于输出分辨率；
-- ReShade 日志先记录低分辨率 NR 被拒绝并切到 native，随后出现 `inline feature 18 evaluation succeeded`；
-- `Successful NR frames` 不停在 `3`，而是持续增长（验证脚本要求日志里至少到 `count=60`）；
-- GIMI Mod、`F10` 重载、ReShade `Home` 菜单及效果均正常。
+```text
+signed DLSSNR D3D12 runtime initialized through nrchain_nvngx.dll
+signed feature 18 create 3072x1728 -> 3072x1728 ... Success
+NR-before-SR evaluate succeeded: count=...
+SuperSampling ... create=3072x1728 -> 3840x2160
+```
 
-详见 [`docs/TESTING.md`](docs/TESTING.md)。
+只有 Feature 1 计数、没有 `NR-before-SR evaluate succeeded`，不算 DLSS5 生效。
 
-## 风险说明
+## HDR 截图
 
-这是第三方游戏修改工具整合，不是 HoYoverse、NVIDIA、ReShade 或各上游项目的官方产品。游戏更新可能使 Bridge 的 RVA 失效；请自行确认服务条款、账号与在线使用风险。第三方二进制和源码修改保留各自许可证，来源见 [`third_party/UPSTREAM-COMMITS.md`](third_party/UPSTREAM-COMMITS.md)。
+GIMI 会把最终 R10 交换链的 HDR10/PQ 色彩空间交给 Hosted ReShade。Before/After 截图保存为 16 位 RGB PNG，并带 BT.2020/PQ 标记；旧构建误按无标记 8 位 sRGB 保存时会发灰。HDR PNG 需要支持色彩管理的查看器；上传普通 SDR 平台前应做 HDR→SDR 色调映射。
+
+## 风险与许可证
+
+这是第三方实验性游戏修改整合，不是 HoYoverse、NVIDIA、ReShade、OptiScaler、RenoDX 或插件作者的官方产品。游戏、驱动和 NGX Runtime 更新可能改变格式、标志或 Hook 顺序；请自行确认服务条款、账号与在线使用风险。
+
+根目录脚本和文档使用本仓库 MIT 许可证。第三方源码、补丁形成的衍生构建、Shader 与二进制继续受各自上游许可证和声明约束。
