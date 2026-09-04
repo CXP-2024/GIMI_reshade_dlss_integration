@@ -308,29 +308,49 @@ function Configure-BridgeRenderScale {
 }
 
 function Configure-Gimi {
-    param([string]$GimiDirectory, [hashtable]$State)
+    param(
+        [string]$GimiDirectory,
+        [string]$GameExecutableName,
+        [hashtable]$State
+    )
     $gimiIni = Join-Path $GimiDirectory 'd3dx.ini'
     $lines = [string[]](Get-Content -LiteralPath $gimiIni -Encoding UTF8)
-    $inSystem = $false
+    $currentSection = ''
     $hookValue = $null
+    $targetValue = $null
     foreach ($line in $lines) {
         $trimmed = $line.Trim()
         if ($trimmed -match '^\[([^]]+)\]') {
-            $inSystem = $Matches[1].Equals('System', [StringComparison]::OrdinalIgnoreCase)
+            $currentSection = $Matches[1]
             continue
         }
-        if ($inSystem -and $line -match '^\s*hook\s*=\s*(.*?)\s*$') {
+        if ($currentSection.Equals('System', [StringComparison]::OrdinalIgnoreCase) -and
+            $line -match '^\s*hook\s*=\s*(.*?)\s*$') {
             $hookValue = $Matches[1].Trim()
-            break
+            continue
+        }
+        if ($currentSection.Equals('Loader', [StringComparison]::OrdinalIgnoreCase) -and
+            $line -match '^\s*target\s*=\s*(.*?)\s*$') {
+            $targetValue = $Matches[1].Trim().Trim('"')
         }
     }
-    if ([string]::IsNullOrWhiteSpace($hookValue) -or
-        -not $hookValue.Equals('recommended', [StringComparison]::OrdinalIgnoreCase)) {
+
+    $hookNeedsUpdate = [string]::IsNullOrWhiteSpace($hookValue) -or
+        -not $hookValue.Equals('recommended', [StringComparison]::OrdinalIgnoreCase)
+    $targetNeedsUpdate = [string]::IsNullOrWhiteSpace($targetValue) -or
+        -not $targetValue.Equals($GameExecutableName, [StringComparison]::OrdinalIgnoreCase)
+    if ($hookNeedsUpdate -or $targetNeedsUpdate) {
         Backup-FileIfExternal -Path $gimiIni -Name 'd3dx.ini' -State $State
+    }
+    if ($hookNeedsUpdate) {
         Set-IniValue -Path $gimiIni -Section 'System' -Key 'hook' -Value 'recommended'
+    }
+    if ($targetNeedsUpdate) {
+        Set-IniValue -Path $gimiIni -Section 'Loader' -Key 'target' -Value $GameExecutableName
     }
     $State['ManagedGimiIni'] = $gimiIni
     $State['GimiHookMode'] = 'recommended'
+    $State['GimiTargetExecutable'] = $GameExecutableName
 
     $modsDirectory = Join-Path $GimiDirectory 'Mods'
     # An empty array in a PowerShell assignment is unrolled to $null. Keep an
@@ -469,7 +489,7 @@ $state['InjectionOrder'] = @(
     'GIMI-hosted ReShade runtime on final Present'
 )
 Install-GimiRuntime -DestinationDirectory $GimiPath -State $state
-Configure-Gimi -GimiDirectory $GimiPath -State $state
+Configure-Gimi -GimiDirectory $GimiPath -GameExecutableName $gameExecutableName -State $state
 Configure-GimiHealthBarCompatibility -GimiDirectory $GimiPath -State $state
 Configure-OptiScaler
 Configure-BridgeRenderScale -Profile $TestProfile -State $state
@@ -481,6 +501,7 @@ Write-Utf8File -Path $statePath -Content ($state | ConvertTo-Json -Depth 4)
 Write-Status 'Configuration completed.' Green
 Write-Host "  Game: $GamePath"
 Write-Host "  GIMI: $GimiPath"
+Write-Host "  GIMI target: $gameExecutableName"
 Write-Host '  GIMI hook: recommended (required for the UnlockFPS proxy device)'
 if ([int]$state['GimiModIniCount'] -gt 0) {
     Write-Host "  GIMI mods: $($state['GimiModIniCount']) INI file(s) under $($state['GimiModDirectory'])"

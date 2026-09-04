@@ -28,6 +28,8 @@ Downloads 中的完整离线包已经包含 Runtime，可以跳过本节。GitHu
 4. 输入 GIMI 的 `3dmigoto` 文件夹路径，而不是它的上级目录。
 5. 启动器完成配置后会调用包内 `unlockfps_nc.exe`。
 
+启动器会把 GIMI `d3dx.ini` 的 `[Loader] target` 同步为所选文件名：国内服使用 `YuanShen.exe`，国际服使用 `GenshinImpact.exe`。切换服务器或游戏目录后请运行 `Configure-Again.bat`，不要只手工修改 `fps_config.json`。
+
 启动器会执行这些动作：
 
 - 把兼容版 `GIMI/d3d11.dll` 备份后安装到所选 GIMI 目录；
@@ -94,7 +96,7 @@ GitHub 版需要按本文“GitHub 版先安装 DLSS 5 Runtime”完成一次安
 
 ### GIMI Mod 不工作
 
-确认使用的是原来的 GIMI 目录，并且 `Mods` 与 `ShaderFixes` 仍在。检查 `d3dx.ini` 的 `[System] hook=recommended`。不要同时启动 `3DMigoto Loader.exe`。
+确认使用的是原来的 GIMI 目录，并且 `Mods` 与 `ShaderFixes` 仍在。检查 `d3dx.ini` 的 `[System] hook=recommended`，以及 `[Loader] target` 是否与当前游戏一致（国服 `YuanShen.exe`、国际服 `GenshinImpact.exe`）。不一致时运行 `Configure-Again.bat`。不要同时启动 `3DMigoto Loader.exe`。
 
 ## 恢复原来的 GIMI
 

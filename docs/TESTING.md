@@ -45,6 +45,22 @@ SuperSampling ... create=3072x1728 -> 3840x2160
 - `F6` 切换前置 NR 时用户确认光影效果有实际差异；
 - 游戏保持响应，未重新引入旧的 D3D11/DX12 Context 指针冲突。
 
+## 国服目标名回归
+
+国服可执行文件不是国际服的 `GenshinImpact.exe`，而是 `YuanShen.exe`。仅修改 UnlockFPS 的 `GamePath` 不够；GIMI `d3dx.ini` 的 `[Loader] target` 也必须同步，否则 3DMigoto、其托管的最终 ReShade 和前置 NR 资源链会失效。
+
+修复后使用同一套组件在国服 7.0.0 实机验证：
+
+```text
+GIMI target: YuanShen.exe
+Game path: H:\Genshin Impact Game\YuanShen.exe
+Recreated runtime environment ... ReShade.ini
+signed feature 18 create 960x540 -> 960x540 ... Success
+NR-before-SR evaluate succeeded: count=1800 extent=960x540
+```
+
+随后在隔离配置中切回国际服，`target=GenshinImpact.exe` 与安装验证同样通过。发布验收必须覆盖两个文件名的双向切换，不能只验证路径输入框是否接受 `YuanShen.exe`。
+
 ## HDR 截图验证
 
 旧 Hosted Runtime 未收到 `SetColorSpace1` 信息，会把 R10/PQ 背景误存为无标记 8 位 sRGB PNG，画面呈灰白。修复后 GIMI 在创建 Hosted Runtime 前传递 HDR10/PQ 元数据。
@@ -63,7 +79,7 @@ SuperSampling ... create=3072x1728 -> 3840x2160
 每次更新后至少完成：
 
 1. 从全新解压目录运行 `Verify-Installation.ps1`，所有 manifest 项必须通过；
-2. 进入大世界并活动数分钟；
+2. 确认 GIMI `[Loader] target` 与当前 `YuanShen.exe` 或 `GenshinImpact.exe` 一致，再进入大世界并活动数分钟；
 3. 确认 Bridge 分发、Feature 18 和 Feature 1 三类计数都持续增长；
 4. 确认 Feature 18 输入输出尺寸相同，Feature 1 输出尺寸更大；
 5. 测试 GIMI Mod、`F10`、`Home`、`Insert` 与 `F6`；

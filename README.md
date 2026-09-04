@@ -31,7 +31,7 @@ GitHub 仓库包含启动器、经修改的兼容组件、普通 DLSS Runtime、
 1. 完整解压；不要在压缩包预览窗口中运行。
 2. 如果来自 GitHub，先运行 `Install-DLSS5-Runtime.bat` 安装上述大组件。
 3. 双击 `Launch-Genshin-GIMI-DLSS-ReShade.bat`。
-4. 首次输入国内服 `YuanShen.exe` 或国际服 `GenshinImpact.exe` 的完整路径，以及现有 GIMI `3dmigoto` 目录。
+4. 首次输入国内服 `YuanShen.exe` 或国际服 `GenshinImpact.exe` 的完整路径，以及现有 GIMI `3dmigoto` 目录。启动器会同步更新 GIMI `[Loader] target`，在国服与国际服之间切换后必须重新运行 `Configure-Again.bat`。
 5. 以后始终从同一 BAT 启动；路径改变时运行 `Configure-Again.bat`。
 6. `Insert` 打开 OptiScaler，`Home` 打开最终 ReShade，`F6` 切换前置 NR，`F10` 重载 GIMI Mod。
 

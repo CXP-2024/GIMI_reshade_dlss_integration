@@ -109,6 +109,13 @@ if ($configuredGameName -notin @('YuanShen.exe', 'GenshinImpact.exe')) {
     throw "Configured game executable must be YuanShen.exe or GenshinImpact.exe: $($state.GamePath)"
 }
 Assert-File -Path (Join-Path $state.GimiPath '3DMigoto Loader.exe') -Label 'Configured GIMI Loader'
+$gimiIni = Join-Path $state.GimiPath 'd3dx.ini'
+Assert-File -Path $gimiIni -Label 'Configured GIMI d3dx.ini'
+$gimiTarget = Get-IniValue -Path $gimiIni -Section 'Loader' -Key 'target'
+if ([string]::IsNullOrWhiteSpace($gimiTarget) -or
+    -not $gimiTarget.Trim().Trim('"').Equals($configuredGameName, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "GIMI Loader target '$gimiTarget' does not match the configured game executable '$configuredGameName'. Run Configure-Again.bat."
+}
 Assert-File -Path $managedIni -Label 'Managed ReShade configuration'
 Assert-File -Path $preNrConfig -Label 'DLSS5 pre-NR configuration'
 Assert-File -Path $optiIni -Label 'OptiScaler configuration'
@@ -131,6 +138,10 @@ if ((Get-IniValue -Path $optiIni -Section 'DlssNr' -Key 'Enabled') -ne 'false' -
 }
 
 $fpsConfig = Get-Content -LiteralPath (Join-Path $root 'fps_config.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+if (-not ([IO.Path]::GetFullPath([string]$fpsConfig.GamePath)).Equals(
+        [IO.Path]::GetFullPath([string]$state.GamePath), [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'UnlockFPS GamePath does not match the configured game executable. Run Configure-Again.bat.'
+}
 $expectedDllList = @($reShadeDll, $bridgeDll, $optiDll)
 if (@($fpsConfig.DllList).Count -ne $expectedDllList.Count -or (@($fpsConfig.DllList) -join '|') -ne ($expectedDllList -join '|')) {
     throw 'UnlockFPS DLL order does not match the validated stable chain.'
