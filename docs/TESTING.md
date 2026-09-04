@@ -70,6 +70,8 @@ SuperSampling ... create=3072x1728 -> 3840x2160
 6. 截取 Before/After，确认 PNG 为 16 位且带 cICP `9,16,0,1`；
 7. 退出游戏后运行 `Verify-Installation.ps1 -LastRun`。
 
+发布维护者若要同时强制核对本项目验证过的 RTX 50 Runtime 哈希，可运行 `Verify-Installation.ps1 -LastRun -RequireValidatedDlssNrHash`。普通验证允许玩家自行替换 `nvngx_dlssnr.dll`，但会对未知哈希显示警告。
+
 ## 验证边界
 
 - 当前只验证 RTX 5080/615+ 驱动，不宣称 RTX 40、AMD、Intel、Wine 或帧生成可用；

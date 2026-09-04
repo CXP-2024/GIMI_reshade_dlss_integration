@@ -50,7 +50,7 @@
 - `nrchain_nvngx.dll`: 原包二进制未修改，SHA-256 `DB26E486592B252072BA5734FC2B27412863B8526826225640C837D4B4D11B60`
 - Configuration-only change: `nr_before_sr.ini` 从上游默认 `Mode=1` 改为本项目验证的 `Mode=2`；Add-on 与私有桥本体未反编译修改
 - The Add-on's HDR composition method is derived from clshortfuse/RenoDX under MIT; full notice is kept beside the Add-on in `components/DLSS5/Addons/pre-nr/THIRD_PARTY_NOTICES.txt`
-- `nvngx_dlssnr.dll` 原样使用但不提交 GitHub；README 与安装脚本提供下载位置、目标路径和固定 SHA-256
+- `nvngx_dlssnr.dll` 原样使用但不提交 GitHub；README 与安装脚本提供下载位置、目标路径和已验证 SHA-256。玩家提供的其他哈希会被明确标为未验证，但默认允许安装与启动
 
 ## Lilium ReShade HDR Shaders
 

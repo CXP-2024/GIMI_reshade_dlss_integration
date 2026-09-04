@@ -10,8 +10,10 @@ GitHub 仓库包含启动器、经修改的兼容组件、普通 DLSS Runtime、
 
 - 国外：[Google Drive](https://drive.google.com/file/d/1L7Pi4adSQal_OxpEzTMuT0NfeQTKIK-_/view?usp=sharing)
 - 国内：[百度网盘](https://pan.baidu.com/s/1SAm1-QL0YvH8Kc28OGigAA?pwd=qisz)，提取码 `qisz`
-- 必须匹配的 SHA-256：`E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E`
+- 本项目已验证版本的 SHA-256：`E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E`
 - 安装目标：`components/DLSS5/Addons/pre-nr/nvngx_dlssnr.dll`
+
+玩家可以换用其他可信来源、适合自己显卡与驱动的 `nvngx_dlssnr.dll`。文件名必须保持不变；哈希不是上述已验证值时，安装器和启动器会显示黄色的“未验证版本”警告，但不会阻止安装或启动。其他版本的兼容性由玩家自行确认。
 
 完整离线包会包含这个文件，因此不需要提前安装 ReShade、OptiScaler、普通 DLSS DLL 或 DLSS5 Add-on。
 
@@ -29,7 +31,7 @@ GitHub 仓库包含启动器、经修改的兼容组件、普通 DLSS Runtime、
 1. 完整解压；不要在压缩包预览窗口中运行。
 2. 如果来自 GitHub，先运行 `Install-DLSS5-Runtime.bat` 安装上述大组件。
 3. 双击 `Launch-Genshin-GIMI-DLSS-ReShade.bat`。
-4. 首次输入 `GenshinImpact.exe` 的完整路径和现有 GIMI `3dmigoto` 目录。
+4. 首次输入国内服 `YuanShen.exe` 或国际服 `GenshinImpact.exe` 的完整路径，以及现有 GIMI `3dmigoto` 目录。
 5. 以后始终从同一 BAT 启动；路径改变时运行 `Configure-Again.bat`。
 6. `Insert` 打开 OptiScaler，`Home` 打开最终 ReShade，`F6` 切换前置 NR，`F10` 重载 GIMI Mod。
 
@@ -62,7 +64,7 @@ Feature 18 只替换原 DLSS 合同的低分辨率 Color；Depth、MotionVectors
 | Dx11FsrBridge | [AizawaHikaru233/genshin_fsr_brigde](https://github.com/AizawaHikaru233/genshin_fsr_brigde) | 二进制代码沿用固定上游提交；本仓库只固定当前原神的 FSR2 输入与渲染比例配置。 |
 | `nr-before-sr.zh-CN.addon64` | Bilibili UP 主 **野生的装机宅** 提供的“DLSS5-AI渲染超分版-RTX50”包 | **二进制未修改**，SHA-256 `522D979CBFF335710F362B9FC2F330988673D7F8C7A1A2D93DA9980EC8DDA695`；仅把配置从默认 `Mode=1` 改为本项目验证的 `Mode=2`。 |
 | `nrchain_nvngx.dll` | 同一“野生的装机宅”发布包 | **未修改**，SHA-256 `DB26E486592B252072BA5734FC2B27412863B8526826225640C837D4B4D11B60`；本仓库只修复了 OptiScaler 对其文件名的误拦截。 |
-| `nvngx_dlssnr.dll` | 同一实验发布所需的签名 NVIDIA NR Runtime | **未修改且不提交 GitHub**；安装脚本只负责 SHA-256 校验和放置。 |
+| `nvngx_dlssnr.dll` | 同一实验发布所需的签名 NVIDIA NR Runtime | **未修改且不提交 GitHub**；安装器报告 SHA-256 并放置文件。已验证哈希会确认通过，玩家提供的其他哈希会警告但允许继续。 |
 | NR HDR 合成方法 | [clshortfuse/RenoDX](https://github.com/clshortfuse/renodx) | 上游 Add-on 的 HDR 模型画面合成方法衍生自 RenoDX；MIT 声明保存在 `THIRD_PARTY_NOTICES.txt`。 |
 | genshin-fps-unlock | [34736384/genshin-fps-unlock](https://github.com/34736384/genshin-fps-unlock) | **有修改**：支持预加载 GIMI、随后按固定顺序注入其余 DLL。 |
 

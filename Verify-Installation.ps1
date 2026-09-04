@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [switch]$LastRun
+    [switch]$LastRun,
+    [switch]$RequireValidatedDlssNrHash
 )
 
 $ErrorActionPreference = 'Stop'
@@ -86,9 +87,15 @@ Write-Host "Package integrity: $checked protected files verified." -ForegroundCo
 Assert-File -Path $dlss5Runtime -Label 'DLSS5 runtime (download it using the links in README.md, then run Install-DLSS5-Runtime.bat)'
 $runtimeHash = Get-Sha256 -Path $dlss5Runtime
 if (-not $runtimeHash.Equals($dlss5RuntimeSha256, [StringComparison]::OrdinalIgnoreCase)) {
-    throw "DLSS5 runtime hash mismatch. Expected $dlss5RuntimeSha256, got $runtimeHash."
+    if ($RequireValidatedDlssNrHash) {
+        throw "DLSS5 runtime hash mismatch. Expected $dlss5RuntimeSha256, got $runtimeHash."
+    }
+    Write-Host 'DLSS5 runtime: player-supplied hash detected; structural verification will continue.' -ForegroundColor Yellow
+    Write-Host "  Release-validated: $dlss5RuntimeSha256" -ForegroundColor Yellow
+    Write-Host "  Installed:        $runtimeHash" -ForegroundColor Yellow
+} else {
+    Write-Host 'DLSS5 runtime: release-validated pre-NR nvngx_dlssnr.dll verified.' -ForegroundColor Green
 }
-Write-Host 'DLSS5 runtime: validated pre-NR nvngx_dlssnr.dll verified.' -ForegroundColor Green
 
 if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
     Write-Host 'Runtime configuration: not created yet. Run Launch-Genshin-GIMI-DLSS-ReShade.bat once.' -ForegroundColor Yellow
@@ -96,7 +103,11 @@ if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
 }
 
 $state = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
-Assert-File -Path $state.GamePath -Label 'Configured GenshinImpact.exe'
+Assert-File -Path $state.GamePath -Label 'Configured Genshin Impact game executable'
+$configuredGameName = [IO.Path]::GetFileName([string]$state.GamePath)
+if ($configuredGameName -notin @('YuanShen.exe', 'GenshinImpact.exe')) {
+    throw "Configured game executable must be YuanShen.exe or GenshinImpact.exe: $($state.GamePath)"
+}
 Assert-File -Path (Join-Path $state.GimiPath '3DMigoto Loader.exe') -Label 'Configured GIMI Loader'
 Assert-File -Path $managedIni -Label 'Managed ReShade configuration'
 Assert-File -Path $preNrConfig -Label 'DLSS5 pre-NR configuration'

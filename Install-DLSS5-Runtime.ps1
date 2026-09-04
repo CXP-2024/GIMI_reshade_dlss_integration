@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [string]$RuntimePath
+    [string]$RuntimePath,
+    [switch]$RequireValidatedHash
 )
 
 $ErrorActionPreference = 'Stop'
@@ -34,7 +35,15 @@ if (-not [IO.Path]::GetFileName($RuntimePath).Equals('nvngx_dlssnr.dll', [String
 
 $actualSha256 = (Get-FileHash -LiteralPath $RuntimePath -Algorithm SHA256).Hash
 if (-not $actualSha256.Equals($expectedSha256, [StringComparison]::OrdinalIgnoreCase)) {
-    throw "Runtime hash mismatch. Expected $expectedSha256, got $actualSha256."
+    if ($RequireValidatedHash) {
+        throw "Runtime hash mismatch. Expected $expectedSha256, got $actualSha256."
+    }
+    Write-Host 'WARNING: This nvngx_dlssnr.dll is not the release-validated RTX 50 runtime.' -ForegroundColor Yellow
+    Write-Host "  Expected: $expectedSha256" -ForegroundColor Yellow
+    Write-Host "  Selected: $actualSha256" -ForegroundColor Yellow
+    Write-Host '  It will be installed as requested, but compatibility is not guaranteed.' -ForegroundColor Yellow
+} else {
+    Write-Host 'Release-validated RTX 50 runtime detected.' -ForegroundColor Green
 }
 
 $destinationDirectory = Split-Path -Parent $destination
@@ -43,5 +52,6 @@ if (-not ([IO.Path]::GetFullPath($RuntimePath)).Equals([IO.Path]::GetFullPath($d
     Copy-Item -LiteralPath $RuntimePath -Destination $destination -Force
 }
 
-Write-Host 'DLSS5 runtime installed and SHA-256 verified:' -ForegroundColor Green
+Write-Host 'DLSS5 runtime installed:' -ForegroundColor Green
 Write-Host "  $destination"
+Write-Host "  SHA-256: $actualSha256"

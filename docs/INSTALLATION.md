@@ -16,13 +16,15 @@ Downloads 中的完整离线包已经包含 Runtime，可以跳过本节。GitHu
 - 国外：[Google Drive](https://drive.google.com/file/d/1L7Pi4adSQal_OxpEzTMuT0NfeQTKIK-_/view?usp=sharing)
 - 国内：[百度网盘](https://pan.baidu.com/s/1SAm1-QL0YvH8Kc28OGigAA?pwd=qisz)，提取码 `qisz`
 
-下载后双击 `Install-DLSS5-Runtime.bat`，把文件拖入窗口并回车。脚本只接受文件名为 `nvngx_dlssnr.dll` 且 SHA-256 为 `E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E` 的版本。不要从不明来源换用同名 DLL。安装目标为 `components/DLSS5/Addons/pre-nr/nvngx_dlssnr.dll`。
+下载后双击 `Install-DLSS5-Runtime.bat`，把文件拖入窗口并回车。文件名必须保持为 `nvngx_dlssnr.dll`；SHA-256 `E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E` 是本项目验证过的 RTX 50 版本。玩家可以安装其他可信来源的兼容版本，脚本会显示黄色的未验证哈希警告但继续安装。安装目标为 `components/DLSS5/Addons/pre-nr/nvngx_dlssnr.dll`。
+
+若维护者需要执行严格的发布校验，可直接运行 `Install-DLSS5-Runtime.ps1 -RequireValidatedHash`；普通玩家不需要这个开关。
 
 ## 首次启动
 
 1. 完整解压项目；不要在压缩包预览窗口中直接运行。
 2. 双击 `Launch-Genshin-GIMI-DLSS-ReShade.bat`。
-3. 输入游戏本体 `GenshinImpact.exe` 的完整路径。
+3. 输入国内服 `YuanShen.exe` 或国际服 `GenshinImpact.exe` 的完整路径。
 4. 输入 GIMI 的 `3dmigoto` 文件夹路径，而不是它的上级目录。
 5. 启动器完成配置后会调用包内 `unlockfps_nc.exe`。
 
@@ -85,6 +87,10 @@ Before/After 截图会保存为带 BT.2020/PQ 标记的 16 位 HDR PNG。请用�
 ### 启动器提示缺少 nvngx_dlssnr.dll
 
 GitHub 版需要按本文“GitHub 版先安装 DLSS 5 Runtime”完成一次安装。完整离线包若出现此提示，说明解压不完整或文件被安全软件隔离；重新解压并运行 `Verify-Installation.bat`。
+
+### 启动器提示 DLSSNR 哈希未验证
+
+这表示玩家替换的 `nvngx_dlssnr.dll` 与本项目验证过的 RTX 50 版本不同，不代表文件一定损坏。启动器会继续；请自行确认该 Runtime 与显卡代际、驱动和 DLSS5 Add-on 接口兼容。维护者可用 `Verify-Installation.ps1 -RequireValidatedDlssNrHash` 恢复严格校验。
 
 ### GIMI Mod 不工作
 

@@ -4,6 +4,7 @@ param(
     [string]$GimiPath,
     [switch]$ConfigureOnly,
     [switch]$ForceConfigure,
+    [switch]$RequireValidatedDlssNrHash,
     [ValidateSet('PreNRThenDLSS')]
     [string]$TestProfile = 'PreNRThenDLSS'
 )
@@ -74,7 +75,15 @@ function Assert-Dlss5Runtime {
     }
     $actualHash = Get-Sha256 -Path $dlss5Runtime
     if (-not $actualHash.Equals($dlss5RuntimeSha256, [StringComparison]::OrdinalIgnoreCase)) {
-        throw "DLSS5 runtime hash mismatch. Expected $dlss5RuntimeSha256, got $actualHash. Download the validated nvngx_dlssnr.dll again."
+        if ($RequireValidatedDlssNrHash) {
+            throw "DLSS5 runtime hash mismatch. Expected $dlss5RuntimeSha256, got $actualHash."
+        }
+        Write-Host 'WARNING: nvngx_dlssnr.dll is not the release-validated RTX 50 runtime.' -ForegroundColor Yellow
+        Write-Host "  Expected: $dlss5RuntimeSha256" -ForegroundColor Yellow
+        Write-Host "  Selected: $actualHash" -ForegroundColor Yellow
+        Write-Host '  Launch will continue with the player-supplied runtime. Compatibility is not guaranteed.' -ForegroundColor Yellow
+    } else {
+        Write-Host 'DLSS5 runtime: release-validated RTX 50 nvngx_dlssnr.dll detected.' -ForegroundColor Green
     }
 }
 
@@ -423,7 +432,7 @@ if (-not $ForceConfigure -and (Test-Path -LiteralPath $statePath -PathType Leaf)
 
 if ([string]::IsNullOrWhiteSpace($GamePath)) {
     if ($null -ne $saved -and (Test-Path -LiteralPath $saved.GamePath -PathType Leaf)) { $GamePath = $saved.GamePath }
-    else { $GamePath = Read-RequiredPath -Prompt 'Enter the full path to GenshinImpact.exe' -ExpectDirectory $false }
+    else { $GamePath = Read-RequiredPath -Prompt 'Enter the full path to YuanShen.exe or GenshinImpact.exe' -ExpectDirectory $false }
 }
 if ([string]::IsNullOrWhiteSpace($GimiPath)) {
     if ($null -ne $saved -and (Test-Path -LiteralPath $saved.GimiPath -PathType Container)) { $GimiPath = $saved.GimiPath }
@@ -431,9 +440,10 @@ if ([string]::IsNullOrWhiteSpace($GimiPath)) {
 }
 
 $GamePath = [IO.Path]::GetFullPath($GamePath.Trim().Trim('"'))
-Assert-File $GamePath 'GenshinImpact.exe'
-if (-not [IO.Path]::GetFileName($GamePath).Equals('GenshinImpact.exe', [StringComparison]::OrdinalIgnoreCase)) {
-    throw "The selected game executable must be GenshinImpact.exe: $GamePath"
+Assert-File $GamePath 'Genshin Impact game executable'
+$gameExecutableName = [IO.Path]::GetFileName($GamePath)
+if ($gameExecutableName -notin @('YuanShen.exe', 'GenshinImpact.exe')) {
+    throw "The selected game executable must be YuanShen.exe or GenshinImpact.exe: $GamePath"
 }
 $GimiPath = Get-GimiDirectory -InputPath $GimiPath
 
