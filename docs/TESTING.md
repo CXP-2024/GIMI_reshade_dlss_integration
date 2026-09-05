@@ -36,6 +36,10 @@ SuperSampling ... create=3072x1728 -> 3840x2160
 
 这证明 Feature 18 不是在最终 4K 图像上做后处理，也没有取代原来的空间超分；它先改善低分辨率颜色，原 Feature 1 随后完成放大。
 
+## 2026-09-05 双模式与 GIMI 原生 Device 回归
+
+合并 RTX 30 后端修复与 GIMI 原生 Device pass-through 后，在同一 RTX 5080 / 616.56 环境完成两次独立启动：Mode 2 的 `NR-before-SR evaluate succeeded` 达到 2400 帧；Mode 1 的 `post-SR signed feature 18 create 3840x2160 guides=1920x1080` 成功，`NR-after-SR evaluate succeeded` 达到 600 帧。两次均记录 `nativeGimiDevice=true`、原生 Context 解析、Feature 1 创建成功和 Hosted ReShade Add-on 注册。完整证据见 [`DUAL_MODE_VALIDATION_20260905.md`](DUAL_MODE_VALIDATION_20260905.md)。
+
 ## 组件共存
 
 - `Dx11FsrBridge.log` 连续增长到至少 8192 次分发；
@@ -53,7 +57,7 @@ SuperSampling ... create=3072x1728 -> 3840x2160
 
 ```text
 GIMI target: YuanShen.exe
-Game path: H:\Genshin Impact Game\YuanShen.exe
+Game path: <原神目录>\YuanShen.exe
 Recreated runtime environment ... ReShade.ini
 signed feature 18 create 960x540 -> 960x540 ... Success
 NR-before-SR evaluate succeeded: count=1800 extent=960x540
@@ -81,7 +85,7 @@ NR-before-SR evaluate succeeded: count=1800 extent=960x540
 1. 从全新解压目录运行 `Verify-Installation.ps1`，所有 manifest 项必须通过；
 2. 确认 GIMI `[Loader] target` 与当前 `YuanShen.exe` 或 `GenshinImpact.exe` 一致，再进入大世界并活动数分钟；
 3. 确认 Bridge 分发、Feature 18 和 Feature 1 三类计数都持续增长；
-4. 确认 Feature 18 输入输出尺寸相同，Feature 1 输出尺寸更大；
+4. Mode 2 确认 Feature 18 为渲染分辨率 1:1 且 Feature 1 输出更大；Mode 1 确认 Feature 18 等于 Feature 1 输出分辨率且 guides 等于渲染分辨率；
 5. 测试 GIMI Mod、`F10`、`Home`、`Insert` 与 `F6`；
 6. 截取 Before/After，确认 PNG 为 16 位且带 cICP `9,16,0,1`；
 7. 退出游戏后运行 `Verify-Installation.ps1 -LastRun`。
@@ -90,7 +94,8 @@ NR-before-SR evaluate succeeded: count=1800 extent=960x540
 
 ## 验证边界
 
-- 当前只验证 RTX 5080/615+ 驱动，不宣称 RTX 40、AMD、Intel、Wine 或帧生成可用；
+- GIMI 双模式当前在 RTX 5080/616.56 实机通过；RTX 30 Profile 来自已报告 RTX 3090/581.57 通过的“华晓熊”修复并已完成源码合并与静态验证；RTX 40 自动使用 RTX 30 配套方案但仍是实验支持；
+- 不宣称 AMD、Intel、Wine 或帧生成可用；
 - 原神更新可能改变 Bridge RVA、资源格式或输入合同；
 - HDR PNG 在不支持 PQ/BT.2020 的查看器中仍可能显示错误；
 - 性能和画质偏好与链路是否正确执行是两个独立问题。

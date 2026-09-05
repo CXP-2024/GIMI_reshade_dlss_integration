@@ -9,6 +9,7 @@ git clone https://github.com/bo3b/3Dmigoto.git
 Set-Location 3Dmigoto
 git checkout 8f329bd94fecc9bbcb9211ffd42a95dd7fe6b43e
 git apply ..\GIMI_reshade_integration\src\patches\3Dmigoto-GIMI-hosted-reshade.patch
+git apply ..\GIMI_reshade_integration\src\patches\3Dmigoto-GIMI-native-device-interop.delta.patch
 ```
 
 本次实机构建命令：
@@ -20,10 +21,10 @@ $msbuild = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBui
   "/p:SolutionDir=$((Get-Location).Path)\" /p:WindowsTargetPlatformVersion=10.0.26100.0
 ```
 
-输出 `builds/x64/Release/d3d11.dll`。当前已验证构建包含 Hosted ReShade HDR10/PQ 色彩空间传递，SHA-256：
+输出 `builds/x64/Release/d3d11.dll`。第二个补丁同时关闭 Release DLL 的 PDB debug-directory 记录，避免公开二进制嵌入维护者的本机构建路径。当前发布构建包含 Hosted ReShade HDR10/PQ 色彩空间传递，SHA-256：
 
 ```text
-B85512DEE19BFBA65978F9011C6551E0DDD6F52FAEC6F6DDA1714F948CF79A80
+50B0AAB76C8ED74ACDEE031437E34873C6C451DDE214992A8D39065B6D7F8066
 ```
 
 ## OptiScaler
@@ -33,14 +34,15 @@ git clone --recursive https://github.com/Dagherbou/OptiScaler_DLSSNR.git
 Set-Location OptiScaler_DLSSNR
 git checkout 973761621353b99bee3dc7d4bb27b117fef2644f
 git apply ..\GIMI_reshade_integration\src\patches\OptiScaler-DLSSOn12-GIMI-pre-NR.patch
+git apply ..\GIMI_reshade_integration\src\patches\OptiScaler-GIMI-RTX30-dual-mode.delta.patch
 ```
 
-用 Visual Studio 2022 打开 `OptiScaler.sln` 并构建 x64 Release。补丁包含 GIMI 原生 Device/Context 解析、跨 API 守卫、原神 R10 共享颜色的 FP16 转换和 `nrchain_nvngx.dll` 名称冲突修复；最终配置保持 `Plugins.LoadReShade=false`、`DlssNr.Enabled=false`，因为 ReShade 和唯一的 Feature 18 pass 分别由 GIMI 与外部 pre-NR Add-on 管理。
+用 Visual Studio 2022 打开 `OptiScaler.sln` 并构建 x64 Release。补丁序列包含 GIMI 原生 Device/Context 解析、原生 NGX 参数对象、typed/untyped D3D12 资源槽、queue-affinity 标记、R8/R10/R11 FP16 输入/输出载体和 `nrchain_nvngx.dll` 名称冲突修复；最终配置保持 `Plugins.LoadReShade=false`、`DlssNr.Enabled=false`，因为 ReShade 和唯一的 Feature 18 pass 分别由 GIMI 与外部双模式 Add-on 管理。
 
 已验证 `OptiScaler.dll` SHA-256：
 
 ```text
-B9E6D5D79D9DDF6FE7170C0DC783F3D40825CAC8338CE4CD1D24E7EFE9A84760
+2D86C3E6728F018F259AABC052F78E53A039A1B0D6BBBC3AEB7571BB67D61F44
 ```
 
 ## Dx11FsrBridge
@@ -82,12 +84,13 @@ git apply ..\GIMI_reshade_integration\src\patches\ReShade-hosted-addon-present-e
 084FA6B41AC9FC0CF66055E95C91C69A5BEF153612DDA15E18EACB21C9F52C54
 ```
 
-## DLSS5 前置 NR Add-on 与私有桥
+## DLSS5 双模式 Add-on 与两套私有桥
 
-`nr-before-sr.zh-CN.addon64` 与 `nrchain_nvngx.dll` 来自 Bilibili UP 主“野生的装机宅”提供的 `DLSS5-AI渲染超分版-RTX50` 包，本仓库没有修改这两个二进制。唯一配置变化是把 `nr_before_sr.ini` 的默认 `Mode=1` 改为已验证的 `Mode=2`。约 165 MB 的 `nvngx_dlssnr.dll` 不提交到 GitHub；完整离线包加入后必须核对：
+`nr-before-sr.zh-CN.addon64` 来自 Bilibili UP 主“野生的装机宅”提供的 `DLSS5-AI渲染超分版-RTX50` 包且二进制未修改。RTX 50 的 `nrchain_nvngx.dll` 同样来自该包；RTX 30/40 的 `nrchain_nvngx.dll` 来自文档署名“华晓熊”的修复包。新解压配置默认 Mode 2，但脚本不再覆盖 Mode 1、F6 状态或 ReShade 预设。约 165 MB 的 `nvngx_dlssnr.dll` 不提交到 GitHub；完整离线包加入后必须分别核对：
 
 ```text
-E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E
+RTX 50:    E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E
+RTX 30/40: 6EB209E764F39872625DEBD6ABAF45E2BB6322F6F270F781F70C059AE30B3927
 ```
 
 ## 发布布局
@@ -102,8 +105,13 @@ components/ReShade/ReShade64.dll
 components/DLSS5/Addons/pre-nr/nr-before-sr.zh-CN.addon64
 components/DLSS5/Addons/pre-nr/nrchain_nvngx.dll
 components/DLSS5/Addons/pre-nr/nr_before_sr.ini
+components/DLSS5/Addons/pre-nr-rtx30/nr-before-sr.zh-CN.addon64
+components/DLSS5/Addons/pre-nr-rtx30/nrchain_nvngx.dll
+components/DLSS5/Addons/pre-nr-rtx30/nr_before_sr.ini
 # Full offline archive only:
 components/DLSS5/Addons/pre-nr/nvngx_dlssnr.dll
+components/DLSS5/Addons/pre-nr-rtx30/nvngx_dlssnr.dll
+DLSS5-Profiles.ps1
 Configure-And-Launch.ps1
 Install-DLSS5-Runtime.ps1
 Launch-Genshin-GIMI-DLSS-ReShade.bat

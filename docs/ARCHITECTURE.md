@@ -1,4 +1,4 @@
-# Pre-NR then DLSS Super Resolution architecture
+# GIMI-hosted dual-mode DLSS5 architecture
 
 ## Validated frame graph
 
@@ -10,15 +10,13 @@ Dx11FsrBridge
   |  translates the game's color/depth/motion/jitter contract
   v
 Patched OptiScaler v0.2 DLSS-on-DX12 bridge
-  |  uses GIMI's private native-context trampoline
-  |  promotes Color to R16G16B16A16_FLOAT on the same D3D12 command list
+  |  uses GIMI's private native-device and native-context trampolines
+  |  exposes typed/untyped resource slots and queue-affinity metadata
   v
-nr-before-sr Mode 2 + nrchain_nvngx
-  |  signed NGX Feature 18: render resolution -> render resolution
-  |  replaces only the low-resolution Color parameter
-  v
-Original NGX Feature 1
-  |  render resolution -> output resolution
+nr-before-sr + profile-matched nrchain_nvngx
+  |  Mode 2: Feature 18 render-resolution NR -> original Feature 1 DLSS SR
+  |  Mode 1: original Feature 1 DLSS SR -> output-resolution Feature 18 NR
+  |  packed/typeless output uses an FP16 carrier and is copied back after completion
   v
 GIMI Mods and sole final Present owner
   v
@@ -32,8 +30,9 @@ Feature 18: 3072x1728 -> 3072x1728
 Feature 1 : 3072x1728 -> 3840x2160
 ```
 
-This is one neural-rendering pass followed by one spatial-upscaling pass. It is
-not two competing upscalers and is not native-resolution post-processing.
+Mode 2 is one neural-rendering pass followed by one spatial-upscaling pass, not
+two competing upscalers. Mode 1 deliberately reverses those two passes to restore
+the add-on's original output-resolution NR comparison path.
 
 ## Ownership rules
 
@@ -46,9 +45,8 @@ not two competing upscalers and is not native-resolution post-processing.
 4. OptiScaler's D3D11 device vtable hooks remain disabled. Only the NGX work uses
    GIMI's private pass-through context; normal game rendering and Mods retain the
    wrapped GIMI context.
-5. OptiScaler's built-in post-upscale DLSSNR path is disabled. Mode 2 in
-   nr-before-sr owns the only Feature 18 pass, while original DLSS Feature 1 owns
-   final spatial upscaling.
+5. OptiScaler's built-in DLSSNR path is disabled. The external add-on owns the
+   only Feature 18 pass and selects Mode 1 or Mode 2; both cannot run at once.
 
 ## Required compatibility fixes
 
@@ -59,12 +57,18 @@ The DX11 wrapped-swapchain Present path previously passed an
 misread as `PSSetConstantBuffers`, producing a misleading GIMI/D3D11 crash.
 Timing and interop calls are now made only when the feature API matches DX11.
 
-### 2. GIMI native-context trampoline
+### 2. GIMI native-device and native-context trampolines
 
 Querying a newer D3D11 context interface does not bypass GIMI's process-wide
 vtable detours. GIMI publishes its existing original-context trampoline through
 private GUID `91ACFD68-5A6F-45EA-B8D0-71ACC32151B7`; the DLSS-on-DX12 bridge uses
 that context for NGX Create/Evaluate only.
+
+The RTX 30 backend must allocate capability parameters and establish native NGX
+before the first feature creation. A second private GUID,
+`DB17DC9A-5A5A-4AC7-A4CE-EF41F7C51D5C`, exposes GIMI's original D3D11 Device.
+OptiScaler uses it only for native NGX initialization/parameter objects; the game
+and Mods continue through GIMI's wrapped Device and Context.
 
 ### 3. Correct FSR2 API selection
 
@@ -74,11 +78,11 @@ actual DX11 carrier is translated.
 
 ### 4. Shareable color format and FP16 promotion
 
-Genshin supplies `R10G10B10A2_TYPELESS`. The DX11/DX12 shared texture uses its
-typed `R10G10B10A2_UNORM` view. Reverse engineering of the pre-NR add-on showed
-that its acceptance rule permits only DXGI format 10 (FP16) or 26 (R11). A
-built-in `FT_Dx12` compute copy therefore promotes R10 to
-`R16G16B16A16_FLOAT` before the add-on sees the Feature 1 parameters.
+Genshin may supply R8/R10/R11 packed or typeless resources. The compatibility
+build maintains both typed and untyped D3D12 parameter slots and promotes these
+formats to `R16G16B16A16_FLOAT` when the add-on/NGX contract requires it. Mode 2
+uses the FP16 carrier before Feature 1; Mode 1 uses an FP16 output carrier after
+Feature 1, then copies the completed NR result back to the game's output resource.
 
 The conversion, Feature 18, and Feature 1 are submitted on the same D3D12
 command list, so their order is guaranteed before the DX12-to-DX11 copyback.
@@ -104,21 +108,20 @@ HDR PNG output is 16-bit and carries BT.2020/PQ metadata.
 
 ## Failure behavior
 
-The add-on's Mode 2 path creates Feature 18 at the render extent, runs it into a
-temporary low-resolution color resource, and passes that resource to the
-original Feature 1. If Feature 18 creation or evaluation fails, the add-on calls
-the original SR contract with the untouched game color. It never substitutes an
-incomplete NR output.
+Mode 2 creates Feature 18 at the render extent, runs it into a temporary
+low-resolution color resource, and passes that resource to original Feature 1.
+Mode 1 first completes original Feature 1 and then runs output-resolution Feature
+18. If Feature 18 creation or evaluation fails, the add-on preserves the original
+DLSS result. It never substitutes an incomplete NR output.
 
 ## Hard success criteria
 
 A valid run must show all of the following in one session:
 
-- GIMI pass-through context resolved and D3D12 Feature 1 created.
-- Carrier Color format is `R16G16B16A16_FLOAT` when observed by nr-before-sr.
+- GIMI pass-through Device/Context resolved, native NGX parameters allocated, and D3D12 Feature 1 created.
+- The selected RTX profile's `nrchain` and `nvngx_dlssnr.dll` form the intended pair.
 - Signed DLSSNR runtime initialized through `nrchain_nvngx.dll`.
-- Feature 18 created at render resolution with identical input/output extent.
-- `NR-before-SR evaluate succeeded` grows continuously.
-- Feature 1 continues from render resolution to output resolution.
+- Mode 2: Feature 18 is 1:1 at render resolution and `NR-before-SR evaluate succeeded` grows continuously.
+- Mode 1: Feature 1 reaches output resolution, Feature 18 is created at that output extent, and `NR-after-SR evaluate succeeded` grows continuously.
 - ReShade add-on registration and shader compilation succeed.
 - The game remains responsive and GIMI remains the final Present owner.

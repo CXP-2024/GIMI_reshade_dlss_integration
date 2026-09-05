@@ -1,24 +1,23 @@
 [CmdletBinding()]
 param(
     [switch]$LastRun,
-    [switch]$RequireValidatedDlssNrHash
+    [switch]$RequireValidatedDlssNrHash,
+    [ValidateSet('auto', 'rtx30', 'rtx40', 'rtx50')]
+    [string]$NrProfile = 'auto'
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $root = Split-Path -Parent $PSCommandPath
+. (Join-Path $root 'DLSS5-Profiles.ps1')
 $manifestPath = Join-Path $root 'package-manifest.sha256'
 $statePath = Join-Path $root 'state\launcher-config.json'
 $managedIni = Join-Path $root 'state\reshade-runtime\ReShade.ini'
-$preNrConfig = Join-Path $root 'components\DLSS5\Addons\pre-nr\nr_before_sr.ini'
-$preNrLog = Join-Path $root 'components\DLSS5\Addons\pre-nr\nr-before-sr.log'
 $optiIni = Join-Path $root 'components\OptiScaler\OptiScaler.ini'
 $bridgeDll = Join-Path $root 'components\Bridge\Dx11FsrBridge.dll'
 $optiDll = Join-Path $root 'components\OptiScaler\OptiScaler.dll'
 $reShadeDll = Join-Path $root 'components\ReShade\ReShade64.dll'
-$dlss5Runtime = Join-Path $root 'components\DLSS5\Addons\pre-nr\nvngx_dlssnr.dll'
-$dlss5RuntimeSha256 = 'E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E'
 
 function Get-Sha256 {
     param([string]$Path)
@@ -84,25 +83,52 @@ foreach ($line in (Get-Content -LiteralPath $manifestPath -Encoding UTF8)) {
 if ($checked -lt 10) { throw 'The package manifest is incomplete.' }
 Write-Host "Package integrity: $checked protected files verified." -ForegroundColor Green
 
+$state = $null
+$savedProfile = ''
+if (Test-Path -LiteralPath $statePath -PathType Leaf) {
+    $state = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($state.PSObject.Properties.Name -contains 'NrProfile') {
+        $savedProfile = [string]$state.NrProfile
+    }
+}
+$resolvedProfile = if ($NrProfile -eq 'auto' -and $savedProfile -in @('rtx30', 'rtx40', 'rtx50')) {
+    $savedProfile
+} else {
+    Resolve-Dlss5NrProfile -RequestedProfile $NrProfile -SavedProfile $savedProfile
+}
+$profile = Get-Dlss5ProfileDefinition -Name $resolvedProfile
+$preNrDirectory = Join-Path $root ("components\DLSS5\Addons\{0}" -f $profile.DirectoryName)
+$preNrConfig = Join-Path $preNrDirectory 'nr_before_sr.ini'
+$preNrLog = Join-Path $preNrDirectory 'nr-before-sr.log'
+$nrChain = Join-Path $preNrDirectory 'nrchain_nvngx.dll'
+$dlss5Runtime = Join-Path $preNrDirectory 'nvngx_dlssnr.dll'
+
+Assert-File -Path $nrChain -Label "$($profile.DisplayName) private NR chain bridge"
+$nrChainHash = Get-Sha256 -Path $nrChain
+if (-not $nrChainHash.Equals([string]$profile.NrChainSha256, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "DLSS5 backend/profile mismatch. Expected nrchain_nvngx.dll $($profile.NrChainSha256), got $nrChainHash."
+}
 Assert-File -Path $dlss5Runtime -Label 'DLSS5 runtime (download it using the links in README.md, then run Install-DLSS5-Runtime.bat)'
 $runtimeHash = Get-Sha256 -Path $dlss5Runtime
-if (-not $runtimeHash.Equals($dlss5RuntimeSha256, [StringComparison]::OrdinalIgnoreCase)) {
+if (-not $runtimeHash.Equals([string]$profile.RuntimeSha256, [StringComparison]::OrdinalIgnoreCase)) {
     if ($RequireValidatedDlssNrHash) {
-        throw "DLSS5 runtime hash mismatch. Expected $dlss5RuntimeSha256, got $runtimeHash."
+        throw "DLSS5 runtime hash mismatch. Expected $($profile.RuntimeSha256), got $runtimeHash."
     }
     Write-Host 'DLSS5 runtime: player-supplied hash detected; structural verification will continue.' -ForegroundColor Yellow
-    Write-Host "  Release-validated: $dlss5RuntimeSha256" -ForegroundColor Yellow
+    Write-Host "  Release-validated: $($profile.RuntimeSha256)" -ForegroundColor Yellow
     Write-Host "  Installed:        $runtimeHash" -ForegroundColor Yellow
 } else {
-    Write-Host 'DLSS5 runtime: release-validated pre-NR nvngx_dlssnr.dll verified.' -ForegroundColor Green
+    Write-Host "DLSS5 runtime: release-validated $($profile.DisplayName) pair verified." -ForegroundColor Green
+}
+if ($profile.SupportLevel -eq 'experimental') {
+    Write-Host 'RTX 40 compatibility: using the RTX 30 backend/runtime pair; launch is allowed but NR is experimental.' -ForegroundColor Yellow
 }
 
-if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
+if ($null -eq $state) {
     Write-Host 'Runtime configuration: not created yet. Run Launch-Genshin-GIMI-DLSS-ReShade.bat once.' -ForegroundColor Yellow
     exit 0
 }
 
-$state = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
 Assert-File -Path $state.GamePath -Label 'Configured Genshin Impact game executable'
 $configuredGameName = [IO.Path]::GetFileName([string]$state.GamePath)
 if ($configuredGameName -notin @('YuanShen.exe', 'GenshinImpact.exe')) {
@@ -120,10 +146,17 @@ Assert-File -Path $managedIni -Label 'Managed ReShade configuration'
 Assert-File -Path $preNrConfig -Label 'DLSS5 pre-NR configuration'
 Assert-File -Path $optiIni -Label 'OptiScaler configuration'
 
-if ((Get-IniValue -Path $preNrConfig -Section 'NRBeforeSR' -Key 'Enabled') -ne '1' -or
-    (Get-IniValue -Path $preNrConfig -Section 'NRBeforeSR' -Key 'Mode') -ne '2' -or
+$nrEnabled = Get-IniValue -Path $preNrConfig -Section 'NRBeforeSR' -Key 'Enabled'
+$nrMode = Get-IniValue -Path $preNrConfig -Section 'NRBeforeSR' -Key 'Mode'
+if ($nrEnabled -notin @('0', '1') -or $nrMode -notin @('1', '2') -or
     (Get-IniValue -Path $preNrConfig -Section 'NRBeforeSR' -Key 'RetryOriginalOnSRFailure') -ne '1') {
-    throw 'DLSS5 pre-NR profile must be enabled in Mode 2 with the original-SR fallback.'
+    throw 'DLSS5 profile must use Enabled=0/1, Mode=1/2, and the original-SR failure fallback.'
+}
+if ($nrEnabled -eq '0') {
+    Write-Host 'DLSS5 Feature 18 is currently disabled by the saved F6 state; configuration is otherwise valid.' -ForegroundColor Yellow
+}
+if ((Get-IniValue -Path $managedIni -Section 'ADDON' -Key 'AddonPath') -ne $preNrDirectory) {
+    throw 'Managed ReShade AddonPath does not match the selected GPU/NR profile. Run Configure-Again.bat.'
 }
 if ((Get-IniValue -Path $optiIni -Section 'Upscalers' -Key 'Dx11Upscaler') -ne 'dlss_12' -or
     (Get-IniValue -Path $optiIni -Section 'Inputs' -Key 'EnableFsr2Inputs') -ne 'true' -or
@@ -153,8 +186,13 @@ if ((Get-IniValue -Path $sidecar -Section 'HostedReShade' -Key 'Enabled') -ne '1
     throw 'GIMI-hosted ReShade is not enabled.'
 }
 
-Write-Host 'Runtime configuration: pre-NR -> original DLSS SR chain verified.' -ForegroundColor Green
-Write-Host '  DLSS5 runs at render resolution, original DLSS performs final upscaling, and GIMI owns final Present.'
+$modeDescription = if ($nrMode -eq '1') {
+    'original DLSS SR -> output-resolution DLSS5 NR'
+} else {
+    'render-resolution DLSS5 NR -> original DLSS SR'
+}
+Write-Host "Runtime configuration: Mode $nrMode ($modeDescription) verified for $($profile.DisplayName)." -ForegroundColor Green
+Write-Host '  GIMI owns final Present; hosted ReShade remains downstream of the selected NR/SR chain.'
 
 if ($LastRun) {
     Assert-File -Path $preNrLog -Label 'DLSS5 pre-NR log from the last run'
@@ -166,23 +204,6 @@ if ($LastRun) {
         throw 'Last-run diagnostic failed: the signed DLSSNR runtime did not initialize through the private bridge.'
     }
 
-    $nrCreate = [regex]::Match($log, 'signed feature 18 create (?<inW>\d+)x(?<inH>\d+) -> (?<outW>\d+)x(?<outH>\d+) result=0x00000001\(Success\)')
-    if (-not $nrCreate.Success) {
-        throw 'Last-run diagnostic failed: no successful Feature 18 creation contract was found.'
-    }
-    $nrInW = [int]$nrCreate.Groups['inW'].Value
-    $nrInH = [int]$nrCreate.Groups['inH'].Value
-    $nrOutW = [int]$nrCreate.Groups['outW'].Value
-    $nrOutH = [int]$nrCreate.Groups['outH'].Value
-    if ($nrInW -ne $nrOutW -or $nrInH -ne $nrOutH) {
-        throw "Last-run diagnostic failed: Feature 18 was not a render-resolution 1:1 pass ($nrInW x $nrInH -> $nrOutW x $nrOutH)."
-    }
-
-    $fp16Color = [regex]::Match($log, "Color\s+=\s+\S+ physical=$($nrInW)x$($nrInH) format=10\(R16G16B16A16_FLOAT\)")
-    if (-not $fp16Color.Success) {
-        throw 'Last-run diagnostic failed: Feature 18 did not receive the validated FP16 render-resolution Color resource.'
-    }
-
     $srEval = [regex]::Match($log, 'SuperSampling Evaluate #\d+ handle=\S+ create=(?<inW>\d+)x(?<inH>\d+) -> (?<outW>\d+)x(?<outH>\d+)')
     if (-not $srEval.Success) {
         throw 'Last-run diagnostic failed: no original DLSS SuperSampling evaluation was found.'
@@ -191,17 +212,44 @@ if ($LastRun) {
     $srInH = [int]$srEval.Groups['inH'].Value
     $srOutW = [int]$srEval.Groups['outW'].Value
     $srOutH = [int]$srEval.Groups['outH'].Value
-    if ($srInW -ne $nrInW -or $srInH -ne $nrInH -or ($srOutW -le $srInW -and $srOutH -le $srInH)) {
-        throw "Last-run diagnostic failed: Feature 1 did not upscale the same render extent ($srInW x $srInH -> $srOutW x $srOutH)."
+    if ($srOutW -le $srInW -and $srOutH -le $srInH) {
+        throw "Last-run diagnostic failed: Feature 1 did not upscale ($srInW x $srInH -> $srOutW x $srOutH)."
     }
 
-    $nrSuccessIndex = $log.IndexOf('NR-before-SR evaluate succeeded', [StringComparison]::Ordinal)
-    if ($nrSuccessIndex -lt 0) {
-        throw 'Last-run diagnostic is incomplete: no successful render-resolution NR evaluation was found.'
+    if ($nrMode -eq '2') {
+        $nrCreate = [regex]::Match($log, 'signed feature 18 create (?<inW>\d+)x(?<inH>\d+) -> (?<outW>\d+)x(?<outH>\d+) result=0x00000001\(Success\)')
+        if (-not $nrCreate.Success) {
+            throw 'Last-run diagnostic failed: no successful render-resolution Feature 18 creation contract was found.'
+        }
+        $nrInW = [int]$nrCreate.Groups['inW'].Value
+        $nrInH = [int]$nrCreate.Groups['inH'].Value
+        $nrOutW = [int]$nrCreate.Groups['outW'].Value
+        $nrOutH = [int]$nrCreate.Groups['outH'].Value
+        if ($nrInW -ne $nrOutW -or $nrInH -ne $nrOutH -or $srInW -ne $nrInW -or $srInH -ne $nrInH) {
+            throw "Last-run diagnostic failed: Mode 2 extents disagree (Feature 18 $nrInW x $nrInH -> $nrOutW x $nrOutH; Feature 1 $srInW x $srInH -> $srOutW x $srOutH)."
+        }
+        $nrSuccessIndex = $log.IndexOf('NR-before-SR evaluate succeeded', [StringComparison]::Ordinal)
+        if ($nrSuccessIndex -lt 0 -or $log.IndexOf('nvngx_dlss EvaluateFeature reached', $nrSuccessIndex, [StringComparison]::Ordinal) -lt 0) {
+            throw 'Last-run diagnostic failed: a successful pre-NR evaluation was not followed by original DLSS SR.'
+        }
+        Write-Host 'Last-run diagnostic: render-resolution NR succeeded before the original DLSS SR pass.' -ForegroundColor Green
+        Write-Host "  Feature 18: $nrInW x $nrInH -> $nrOutW x $nrOutH; Feature 1: $srInW x $srInH -> $srOutW x $srOutH."
+    } else {
+        $postCreate = [regex]::Match($log, 'post-SR signed feature 18 create (?<outW>\d+)x(?<outH>\d+) guides=(?<guideW>\d+)x(?<guideH>\d+) result=0x00000001\(Success\)')
+        if (-not $postCreate.Success) {
+            throw 'Last-run diagnostic failed: no successful output-resolution Feature 18 creation contract was found.'
+        }
+        $nrOutW = [int]$postCreate.Groups['outW'].Value
+        $nrOutH = [int]$postCreate.Groups['outH'].Value
+        $guideW = [int]$postCreate.Groups['guideW'].Value
+        $guideH = [int]$postCreate.Groups['guideH'].Value
+        if ($nrOutW -ne $srOutW -or $nrOutH -ne $srOutH -or $guideW -ne $srInW -or $guideH -ne $srInH) {
+            throw "Last-run diagnostic failed: Mode 1 extents disagree (Feature 1 $srInW x $srInH -> $srOutW x $srOutH; Feature 18 $nrOutW x $nrOutH, guides $guideW x $guideH)."
+        }
+        if ($log.IndexOf('NR-after-SR evaluate succeeded', [StringComparison]::Ordinal) -lt 0) {
+            throw 'Last-run diagnostic failed: no successful post-SR NR evaluation was found.'
+        }
+        Write-Host 'Last-run diagnostic: original DLSS SR succeeded before output-resolution NR.' -ForegroundColor Green
+        Write-Host "  Feature 1: $srInW x $srInH -> $srOutW x $srOutH; Feature 18: $nrOutW x $nrOutH with $guideW x $guideH guides."
     }
-    if ($log.IndexOf('nvngx_dlss EvaluateFeature reached', $nrSuccessIndex, [StringComparison]::Ordinal) -lt 0) {
-        throw 'Last-run diagnostic failed: the original DLSS pass did not follow the successful pre-NR evaluation.'
-    }
-    Write-Host 'Last-run diagnostic: render-resolution NR succeeded before the original DLSS SR pass.' -ForegroundColor Green
-    Write-Host "  Feature 18: $nrInW x $nrInH -> $nrOutW x $nrOutH; Feature 1: $srInW x $srInH -> $srOutW x $srOutH."
 }

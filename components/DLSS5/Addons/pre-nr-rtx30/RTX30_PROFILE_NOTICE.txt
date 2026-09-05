@@ -1,0 +1,21 @@
+RTX 30 compatibility profile
+============================
+
+The RTX 30 nrchain_nvngx.dll and the baseline integration/source changes were supplied
+in DLSS5_GI_Ready_v1.2_PreNR_fixRTX30.zip, whose documentation credits
+"华晓熊". The profile was reported as tested on RTX 3090 with NVIDIA driver
+581.57. This repository preserves that attribution and records exact hashes.
+
+The matching nvngx_dlssnr.dll is RankFTW DLSS NR 310.8.SF-v2
+(file version 310.8.SF.0). It is unsigned and is not stored in GitHub. The
+installer checks it against the recorded SHA-256. Do not mix the RTX 30/40 and
+RTX 50 nrchain/runtime pairs.
+
+This GIMI integration additionally merges the native-device pass-through needed
+to create native NGX parameter objects behind GIMI's D3D11 wrapper. It also
+expands the FP16 output-carrier condition to the R8/R10/R11 packed/typeless
+formats seen in live YuanShen output, restoring Mode 1 for those resources.
+
+The common nr-before-sr.zh-CN.addon64 remains the unmodified binary attributed
+by its original package to Bilibili creator 野生的装机宅. See
+THIRD_PARTY_NOTICES.txt for more information.

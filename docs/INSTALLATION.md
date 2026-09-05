@@ -11,12 +11,12 @@
 
 ## GitHub 版先安装 DLSS 5 Runtime
 
-Downloads 中的完整离线包已经包含 Runtime，可以跳过本节。GitHub 因文件大小限制不包含 `nvngx_dlssnr.dll`：
+完整离线包若同时包含两套 Runtime，可以跳过本节。GitHub 因文件大小限制不包含 `nvngx_dlssnr.dll`：
 
-- 国外：[Google Drive](https://drive.google.com/file/d/1L7Pi4adSQal_OxpEzTMuT0NfeQTKIK-_/view?usp=sharing)
-- 国内：[百度网盘](https://pan.baidu.com/s/1SAm1-QL0YvH8Kc28OGigAA?pwd=qisz)，提取码 `qisz`
+- RTX 50：国外 [Google Drive](https://drive.google.com/file/d/1L7Pi4adSQal_OxpEzTMuT0NfeQTKIK-_/view?usp=sharing)，国内 [百度网盘](https://pan.baidu.com/s/1SAm1-QL0YvH8Kc28OGigAA?pwd=qisz)，提取码 `qisz`；
+- RTX 30/40：从无 GIMI v1.3 完整包提取 RankFTW 310.8.SF-v2 Runtime，国外 [Google Drive](https://drive.google.com/file/d/1d-aaUEo_ftRpY7mFCO7zUTugBKg7pW-j/view?usp=sharing)，国内 [夸克网盘](https://pan.quark.cn/s/f3e0fa0a9155)，压缩包密码 `yuanshenqidong`。
 
-下载后双击 `Install-DLSS5-Runtime.bat`，把文件拖入窗口并回车。文件名必须保持为 `nvngx_dlssnr.dll`；SHA-256 `E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E` 是本项目验证过的 RTX 50 版本。玩家可以安装其他可信来源的兼容版本，脚本会显示黄色的未验证哈希警告但继续安装。安装目标为 `components/DLSS5/Addons/pre-nr/nvngx_dlssnr.dll`。
+下载后双击 `Install-DLSS5-Runtime.bat`，把文件拖入窗口并回车。脚本自动识别 RTX 30/40/50，也可在 PowerShell 中追加 `-NrProfile` 指定。RTX 40 自动使用完整 RTX 30 后端/Runtime 配对，会提示实验支持但不会阻止安装或启动。`nrchain` 哈希错配会被拦截；玩家替换其他可信 Runtime 时只显示黄色警告，除非维护者启用严格哈希开关。
 
 若维护者需要执行严格的发布校验，可直接运行 `Install-DLSS5-Runtime.ps1 -RequireValidatedHash`；普通玩家不需要这个开关。
 
@@ -47,7 +47,7 @@ Downloads 中的完整离线包已经包含 Runtime，可以跳过本节。GitHu
 - `F10`：GIMI 重新加载。Mod 应保持可见，且不应出现致命退出或连续错误音。
 - `Insert`：OptiScaler 菜单。选中的后端应为 DLSS，而不是 Fallback。
 - `Home`：ReShade 菜单。启用/关闭效果应改变最终画面。
-- `F6`：前置 Neural Rendering。切换前后应能观察到光影差异。
+- `F6`：开关 Neural Rendering。插件中勾选“使用渲染分辨率 NR -> SR”为 Mode 2，取消为 Mode 1；模式、开关和 ReShade 预设都会保留。
 
 日志位置：
 
@@ -55,9 +55,10 @@ Downloads 中的完整离线包已经包含 Runtime，可以跳过本节。GitHu
 - `components/OptiScaler/OptiScaler.log`
 - 所选 GIMI 目录中的 `d3d11_log.txt`
 - `state/reshade-runtime/ReShade.log`
-- `components/DLSS5/Addons/pre-nr/nr-before-sr.log`
+- `components/DLSS5/Addons/pre-nr/nr-before-sr.log`（RTX 50）
+- `components/DLSS5/Addons/pre-nr-rtx30/nr-before-sr.log`（RTX 30/40）
 
-真正的 DLSS5 证据是 `nr-before-sr.log` 同时记录 Feature 18 在渲染分辨率的 1:1 成功执行，以及随后 Feature 1 从该渲染分辨率放大到输出分辨率。例如 `3072x1728 -> 3072x1728` 后接 `3072x1728 -> 3840x2160`。只有 Feature 1 或只加载 DLL 不算成功。
+Mode 2 的真正证据是 `NR-before-SR evaluate succeeded` 持续增长，且 Feature 18 为渲染分辨率 1:1、Feature 1 随后放大。Mode 1 则必须看到输出分辨率的 `post-SR signed feature 18 create` 和持续增长的 `NR-after-SR evaluate succeeded`。只有 Feature 1、只加载 DLL 或只显示菜单不算 DLSS5 生效。
 
 ## HDR 与 ReShade 效果
 
@@ -92,7 +93,7 @@ GitHub 版需要按本文“GitHub 版先安装 DLSS 5 Runtime”完成一次安
 
 ### 启动器提示 DLSSNR 哈希未验证
 
-这表示玩家替换的 `nvngx_dlssnr.dll` 与本项目验证过的 RTX 50 版本不同，不代表文件一定损坏。启动器会继续；请自行确认该 Runtime 与显卡代际、驱动和 DLSS5 Add-on 接口兼容。维护者可用 `Verify-Installation.ps1 -RequireValidatedDlssNrHash` 恢复严格校验。
+这表示玩家替换的 `nvngx_dlssnr.dll` 与所选显卡 Profile 的已记录版本不同，不代表文件一定损坏。启动器会继续；请自行确认 Runtime 与显卡代际、驱动、`nrchain` 和 DLSS5 Add-on 接口兼容。维护者可用 `Verify-Installation.ps1 -RequireValidatedDlssNrHash` 恢复严格校验。
 
 ### GIMI Mod 不工作
 

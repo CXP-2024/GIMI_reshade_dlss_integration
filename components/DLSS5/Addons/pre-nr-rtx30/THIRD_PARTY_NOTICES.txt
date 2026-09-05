@@ -1,0 +1,24 @@
+Third-Party Notices
+===================
+
+Distribution attribution
+------------------------
+
+The file nr-before-sr.zh-CN.addon64 was supplied in the package named
+"B站野生的装机宅 DLSS5-AI渲染超分版-RTX50.zip", attributed by its own UI and
+installation note to the Bilibili creator 野生的装机宅. It is redistributed
+unchanged; this repository does not claim its source code or authorship.
+
+The RTX 30 nrchain_nvngx.dll and its original compatibility changes were supplied
+in DLSS5_GI_Ready_v1.2_PreNR_fixRTX30.zip, whose documentation credits “华晓熊”.
+The matching RankFTW 310.8.SF-v2 runtime is not committed to GitHub.
+
+RenoDX
+------
+
+Project: RenoDX by clshortfuse
+Source: https://github.com/clshortfuse/renodx
+
+The HDR model-picture composition used by the add-on is derived from RenoDX's
+DLSS 5 Neural Rendering add-on. The upstream RenoDX code is distributed under
+the MIT License; see https://github.com/clshortfuse/renodx/blob/main/LICENSE.md.
